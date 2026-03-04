@@ -1,0 +1,66 @@
+# Core
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+python-multipart==0.0.20
+python-dotenv==1.0.1
+pydantic==2.10.4
+pydantic-settings==2.7.0
+
+# Database
+sqlalchemy==2.0.36
+aiosqlite==0.20.0
+
+# Vector Store
+chromadb==0.6.3
+
+# LLM & Embeddings
+anthropic==0.42.0
+openai==1.59.3
+langchain==0.3.13
+langchain-openai==0.3.0
+langchain-anthropic==0.3.3
+# langchain-chroma not used — chromadb accessed directly via vector_store.py
+langchain-community==0.3.13
+langchain-text-splitters==0.3.4
+
+# Content Ingestion
+yt-dlp==2024.12.23
+youtube-transcript-api==0.6.3
+trafilatura==2.0.0
+beautifulsoup4==4.12.3
+requests==2.32.3
+httpx==0.28.1
+
+# Audio / Video
+faster-whisper==1.1.0
+
+# Document Parsing
+pdfplumber==0.11.4
+python-docx==1.1.2
+
+# Text Processing
+tiktoken==0.8.0
+chardet==5.2.0
+
+# Search
+google-search-results==2.4.2
+
+# Utilities
+aiofiles==24.1.0
+tenacity==9.0.0
+greenlet==3.1.1
+
+# Voice cloning & TTS
+elevenlabs>=1.0.0        # optional: only needed if ELEVENLABS_API_KEY is set
+edge-tts>=6.1.9          # free fallback TTS (Microsoft Edge voices, no API key needed)
+# Optional true voice cloning (Python ≤ 3.12 only):
+# pip install TTS        # Coqui XTTS v2 — downloads ~1.5 GB model on first use, then offline forever
+
+# Speaker diarization
+pyannote.audio>=3.1.0
+
+# PDF export
+reportlab>=4.0.0
+
+# Image handling
+Pillow>=10.0.0
