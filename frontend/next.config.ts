@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 
+// v1.0.1
 const nextConfig: NextConfig = {
   output: "standalone",
   images: {
