@@ -100,8 +100,8 @@ async def logging_and_auth(request: Request, call_next):
     request_id = str(uuid.uuid4())[:8]
     start = time.monotonic()
 
-    # Auth check (skip for health + docs)
-    if request.url.path not in ("/health", "/docs", "/openapi.json", "/redoc"):
+    # Auth check (skip for health, docs, and CORS preflight)
+    if request.method != "OPTIONS" and request.url.path not in ("/health", "/docs", "/openapi.json", "/redoc"):
         token = request.headers.get("X-Access-Token") or request.query_params.get("token")
         if settings.app_env == "production" and token != settings.access_token:
             return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
