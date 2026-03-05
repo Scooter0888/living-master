@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
@@ -21,7 +21,11 @@ export function CreateMasterModal({ open, onClose, onCreated }: CreateMasterModa
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   // Auto-assign a color — replaced by profile photo once uploaded
-  const [color] = useState(() => COLORS[Math.floor(Math.random() * COLORS.length)]);
+  // Start with COLORS[0] (server-safe), randomize after mount to avoid hydration mismatch
+  const [color, setColor] = useState(COLORS[0]);
+  useEffect(() => {
+    setColor(COLORS[Math.floor(Math.random() * COLORS.length)]);
+  }, []);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
