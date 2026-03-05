@@ -36,16 +36,16 @@ export default function HomePage() {
         position: "sticky", top: 0, zIndex: 20,
       }}>
         <div style={{ maxWidth: 1000, margin: "0 auto", padding: "0 32px", height: 58, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 9 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
             <div style={{
-              width: 28, height: 28, borderRadius: 8,
+              width: 32, height: 32, borderRadius: 9,
               background: "linear-gradient(135deg, #5b5ef4, #818cf8)",
               display: "flex", alignItems: "center", justifyContent: "center",
               boxShadow: "0 2px 10px rgba(91,94,244,0.35)",
             }}>
-              <Sparkles size={13} color="#fff" />
+              <Sparkles size={15} color="#fff" />
             </div>
-            <span style={{ fontSize: 14, fontWeight: 700, color: "var(--text-primary)", letterSpacing: "-0.02em" }}>
+            <span style={{ fontSize: 16, fontWeight: 700, color: "var(--text-primary)", letterSpacing: "-0.03em" }}>
               Living Master
             </span>
           </div>
