@@ -70,7 +70,7 @@ export default function MasterPage() {
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", background: "var(--background)", overflowX: "hidden" }}>
       {/* Header */}
       <header style={{
-        background: "rgba(247,247,249,0.90)",
+        background: "var(--header-bg)",
         backdropFilter: "blur(16px)",
         WebkitBackdropFilter: "blur(16px)",
         borderBottom: "1px solid var(--border)",
@@ -235,7 +235,7 @@ export default function MasterPage() {
       </header>
 
       {/* Content */}
-      <main style={{ flex: 1, maxWidth: 1000, margin: "0 auto", width: "100%", padding: "28px 32px" }} className="page-container">
+      <main style={{ flex: 1, maxWidth: tab === "sources" ? 1200 : 1000, margin: "0 auto", width: "100%", padding: "28px 32px" }} className="page-container">
         <AnimatePresence mode="wait">
 
           {tab === "chat" && (
@@ -251,7 +251,7 @@ export default function MasterPage() {
 
           {tab === "sources" && (
             <motion.div key="sources" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }}
-              style={{ display: "grid", gridTemplateColumns: "minmax(320px, 420px) 1fr", gap: 20, alignItems: "start" }}>
+              style={{ display: "grid", gridTemplateColumns: "320px 1fr", gap: 20, alignItems: "start" }}>
               <div>
                 <div style={{ marginBottom: 14 }}>
                   <h2 style={{ fontSize: 13, fontWeight: 700, color: "var(--text-primary)", letterSpacing: "-0.02em", marginBottom: 3 }}>Add Content</h2>

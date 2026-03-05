@@ -120,7 +120,7 @@ export function SourceLibrary({ sources, masterId, masterName = "Master", onDele
         {/* Header */}
         <div style={{
           display: "grid",
-          gridTemplateColumns: "1fr 80px 160px 68px",
+          gridTemplateColumns: "1fr 80px minmax(180px, 1fr) 68px",
           gap: 0,
           background: "var(--surface-2)",
           borderBottom: "1px solid var(--border)",

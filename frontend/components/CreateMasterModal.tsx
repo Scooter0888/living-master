@@ -20,7 +20,8 @@ interface CreateMasterModalProps {
 export function CreateMasterModal({ open, onClose, onCreated }: CreateMasterModalProps) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [color, setColor] = useState(COLORS[0]);
+  // Auto-assign a color — replaced by profile photo once uploaded
+  const [color] = useState(() => COLORS[Math.floor(Math.random() * COLORS.length)]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -30,7 +31,7 @@ export function CreateMasterModal({ open, onClose, onCreated }: CreateMasterModa
     setError("");
     try {
       await api.masters.create({ name: name.trim(), description: description.trim() || undefined, avatar_color: color });
-      setName(""); setDescription(""); setColor(COLORS[0]);
+      setName(""); setDescription("");
       onCreated();
       onClose();
     } catch (e: any) {
@@ -48,25 +49,14 @@ export function CreateMasterModal({ open, onClose, onCreated }: CreateMasterModa
         {/* Avatar preview */}
         <div className="flex items-center gap-4">
           <div
-            className="w-14 h-14 rounded-xl flex items-center justify-center text-white text-lg font-semibold transition-all duration-200"
+            className="w-14 h-14 rounded-xl flex items-center justify-center text-white text-lg font-semibold"
             style={{ background: color }}
           >
             {initials}
           </div>
-          <div className="flex flex-wrap gap-2">
-            {COLORS.map((c) => (
-              <button
-                key={c}
-                className="w-6 h-6 rounded-md transition-all duration-150"
-                style={{
-                  background: c,
-                  outline: color === c ? `2px solid ${c}` : "2px solid transparent",
-                  outlineOffset: "2px",
-                }}
-                onClick={() => setColor(c)}
-              />
-            ))}
-          </div>
+          <p style={{ fontSize: 12, color: "var(--text-muted)", lineHeight: 1.5 }}>
+            Color auto-assigned.<br />Replace with a photo anytime.
+          </p>
         </div>
 
         <div className="flex flex-col gap-3">

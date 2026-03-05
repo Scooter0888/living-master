@@ -9,6 +9,25 @@ from typing import Optional
 
 from app.services.ingestion.base import IngestedContent
 
+# Anti-bot headers — impersonate a real browser to avoid Railway IP blocks
+_YT_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    ),
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+# yt-dlp base options shared across strategies
+_YTDLP_BASE = {
+    "quiet": True,
+    "no_warnings": True,
+    "http_headers": _YT_HEADERS,
+    "extractor_args": {"youtube": {"player_client": ["tv_embedded", "web"]}},
+    "socket_timeout": 30,
+}
+
 
 def _extract_video_id(url: str) -> Optional[str]:
     patterns = [
@@ -36,7 +55,7 @@ async def ingest_youtube(url: str) -> IngestedContent:
     except Exception as e1:
         print(f"[YouTube] Transcript API failed: {e1}")
 
-    # Strategy 2: yt-dlp description/auto-captions without downloading
+    # Strategy 2: yt-dlp auto-captions without downloading
     try:
         return await _ingest_via_ytdlp_captions(video_id, url)
     except Exception as e2:
@@ -46,26 +65,40 @@ async def ingest_youtube(url: str) -> IngestedContent:
     if not _ffmpeg_available():
         raise RuntimeError(
             "Could not get transcript for this video. "
-            "ffmpeg is not installed — install it to enable audio transcription as a fallback. "
-            "Run: /bin/bash -c \"$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)\" "
-            "then: brew install ffmpeg"
+            "ffmpeg is not installed — install it to enable audio transcription as a fallback."
         )
 
     return await _ingest_via_whisper(url, video_id)
 
 
+async def _get_yt_metadata(video_id: str) -> dict:
+    """Fetch video metadata via yt-dlp with anti-bot options. Falls back gracefully."""
+    import yt_dlp
+    loop = asyncio.get_event_loop()
+
+    def _fetch():
+        opts = {**_YTDLP_BASE, "skip_download": True}
+        try:
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                return ydl.extract_info(
+                    f"https://www.youtube.com/watch?v={video_id}", download=False
+                ) or {}
+        except Exception:
+            return {}
+
+    return await loop.run_in_executor(None, _fetch)
+
+
 async def _ingest_via_transcript_api(video_id: str, url: str) -> IngestedContent:
     from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
-    import yt_dlp
-
     loop = asyncio.get_event_loop()
 
     def _get_transcript():
         ytt = YouTubeTranscriptApi()
-        # Try fetching English directly first
-        for lang in [["en", "en-US", "en-GB"], None]:
+        # Try English first, then any available language
+        for lang_filter in [["en", "en-US", "en-GB"], None]:
             try:
-                result = ytt.fetch(video_id, languages=lang) if lang else ytt.fetch(video_id)
+                result = ytt.fetch(video_id, languages=lang_filter) if lang_filter else ytt.fetch(video_id)
                 return list(result)
             except Exception:
                 continue
@@ -77,16 +110,12 @@ async def _ingest_via_transcript_api(video_id: str, url: str) -> IngestedContent
     if len(text.strip()) < 100:
         raise ValueError("Transcript too short to be useful")
 
-    def _get_metadata():
-        ydl_opts = {"quiet": True, "skip_download": True, "no_warnings": True}
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            return ydl.extract_info(f"https://www.youtube.com/watch?v={video_id}", download=False)
-
-    info = await loop.run_in_executor(None, _get_metadata)
+    # Metadata fetch is best-effort — don't let it block a successful transcript
+    info = await _get_yt_metadata(video_id)
 
     return IngestedContent(
         text=text,
-        title=info.get("title", f"YouTube: {video_id}"),
+        title=info.get("title") or f"YouTube: {video_id}",
         content_type="youtube",
         url=url,
         author=info.get("uploader"),
@@ -106,9 +135,8 @@ async def _ingest_via_ytdlp_captions(video_id: str, url: str) -> IngestedContent
     def _extract():
         with tempfile.TemporaryDirectory() as tmpdir:
             ydl_opts = {
-                "quiet": True,
+                **_YTDLP_BASE,
                 "skip_download": True,
-                "no_warnings": True,
                 "writeautomaticsub": True,
                 "writesubtitles": True,
                 "subtitleslangs": ["en", "en-US"],
@@ -118,13 +146,11 @@ async def _ingest_via_ytdlp_captions(video_id: str, url: str) -> IngestedContent
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 info = ydl.extract_info(url, download=True)
 
-            # Find .vtt file
             text_parts = []
             for f in os.listdir(tmpdir):
                 if f.endswith(".vtt"):
                     with open(os.path.join(tmpdir, f)) as vf:
                         lines = vf.readlines()
-                    # Parse VTT: skip timestamps, deduplicate adjacent lines
                     seen = set()
                     for line in lines:
                         line = line.strip()
@@ -144,7 +170,7 @@ async def _ingest_via_ytdlp_captions(video_id: str, url: str) -> IngestedContent
 
     return IngestedContent(
         text=text,
-        title=info.get("title", f"YouTube: {video_id}"),
+        title=info.get("title") or f"YouTube: {video_id}",
         content_type="youtube",
         url=url,
         author=info.get("uploader"),
@@ -164,6 +190,7 @@ async def _ingest_via_whisper(url: str, video_id: str) -> IngestedContent:
     with tempfile.TemporaryDirectory() as tmpdir:
         def _download():
             ydl_opts = {
+                **_YTDLP_BASE,
                 "format": "bestaudio/best",
                 "outtmpl": os.path.join(tmpdir, "audio.%(ext)s"),
                 "postprocessors": [{
@@ -171,8 +198,6 @@ async def _ingest_via_whisper(url: str, video_id: str) -> IngestedContent:
                     "preferredcodec": "mp3",
                     "preferredquality": "128",
                 }],
-                "quiet": True,
-                "no_warnings": True,
             }
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 return ydl.extract_info(url, download=True)
@@ -192,7 +217,7 @@ async def _ingest_via_whisper(url: str, video_id: str) -> IngestedContent:
 
     return IngestedContent(
         text=text,
-        title=info.get("title", f"YouTube: {video_id}"),
+        title=info.get("title") or f"YouTube: {video_id}",
         content_type="youtube",
         url=url,
         author=info.get("uploader"),
