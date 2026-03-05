@@ -29,7 +29,7 @@ export default function HomePage() {
     <div style={{ minHeight: "100vh", background: "var(--background)" }}>
       {/* Header */}
       <header style={{
-        background: "rgba(247,247,249,0.88)",
+        background: "var(--header-bg)",
         backdropFilter: "blur(16px)",
         WebkitBackdropFilter: "blur(16px)",
         borderBottom: "1px solid var(--border)",
@@ -148,12 +148,10 @@ export default function HomePage() {
               initial={{ opacity: 0, y: 14 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.15, duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
+              className="hero-headline"
               style={{
                 fontSize: 44, fontWeight: 800, letterSpacing: "-0.04em",
                 lineHeight: 1.1, textAlign: "center", marginBottom: 18,
-                background: "linear-gradient(160deg, #0c0c18 20%, #5b5ef4 100%)",
-                WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent",
-                backgroundClip: "text",
               }}
             >
               Their Knowledge.<br />Forever Accessible.

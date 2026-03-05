@@ -1,7 +1,22 @@
 @import "tailwindcss";
 
+/* ── Hero headline gradient — light ── */
+.hero-headline {
+  background: linear-gradient(160deg, #0c0c18 20%, #5b5ef4 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+:root[data-theme="dark"] .hero-headline {
+  background: linear-gradient(160deg, #eeeef6 20%, #7879f8 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
 /* ── Light theme (default) ── */
 :root {
+  --header-bg: rgba(247,247,249,0.88);
   color-scheme: light;
   --color-success: #16a34a;
   --color-error: #dc2626;
@@ -42,6 +57,7 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="dark"]) {
     color-scheme: light;
+    --header-bg: rgba(247,247,249,0.88);
     --background: #f7f7f9;
     --surface: #ffffff;
     --surface-2: #f5f5f8;
@@ -61,6 +77,7 @@
 /* ── Dark theme — activated by data-theme="dark" on <html> ── */
 :root[data-theme="dark"] {
   color-scheme: dark;
+  --header-bg: rgba(8,8,15,0.88);
   --color-success: #4ade80;
   --color-error: #f87171;
   --color-info: #60a5fa;
