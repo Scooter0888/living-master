@@ -32,6 +32,7 @@ logger = logging.getLogger("living_master")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
+    os.makedirs(settings.data_dir, exist_ok=True)
     os.makedirs(settings.chroma_db_path, exist_ok=True)
     os.makedirs(settings.uploads_path, exist_ok=True)
     os.makedirs(settings.photos_path, exist_ok=True)

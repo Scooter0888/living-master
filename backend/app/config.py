@@ -2,6 +2,9 @@ from pydantic_settings import BaseSettings
 from functools import lru_cache
 import os
 
+# Default local data dir = the backend package root
+_LOCAL_DATA_DIR = os.path.dirname(os.path.dirname(__file__))
+
 
 class Settings(BaseSettings):
     anthropic_api_key: str = ""
@@ -13,10 +16,9 @@ class Settings(BaseSettings):
     cors_origins: str = "http://localhost:3000"
     access_token: str = "change_this_to_a_secure_token"
 
-    chroma_db_path: str = os.path.join(os.path.dirname(os.path.dirname(__file__)), "chroma_db")
-    uploads_path: str = os.path.join(os.path.dirname(os.path.dirname(__file__)), "uploads")
-    photos_path: str = os.path.join(os.path.dirname(os.path.dirname(__file__)), "photos")
-    voice_samples_path: str = os.path.join(os.path.dirname(os.path.dirname(__file__)), "voice_samples")
+    # DATA_DIR: Railway sets this to /data (volume mount) so data persists across deploys.
+    # Locally defaults to the backend directory so existing data paths are unchanged.
+    data_dir: str = _LOCAL_DATA_DIR
 
     elevenlabs_api_key: str = ""
     huggingface_token: str = ""
@@ -39,6 +41,26 @@ class Settings(BaseSettings):
     max_upload_mb: int = 500
 
     model_config = {"env_file": ".env", "extra": "ignore"}
+
+    @property
+    def chroma_db_path(self) -> str:
+        return os.path.join(self.data_dir, "chroma_db")
+
+    @property
+    def uploads_path(self) -> str:
+        return os.path.join(self.data_dir, "uploads")
+
+    @property
+    def photos_path(self) -> str:
+        return os.path.join(self.data_dir, "photos")
+
+    @property
+    def voice_samples_path(self) -> str:
+        return os.path.join(self.data_dir, "voice_samples")
+
+    @property
+    def db_path(self) -> str:
+        return os.path.join(self.data_dir, "living_master.db")
 
     @property
     def cors_origins_list(self) -> list[str]:

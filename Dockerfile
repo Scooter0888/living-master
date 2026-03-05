@@ -6,6 +6,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
 
 WORKDIR /app
 
+# Persistent data directory — Railway mounts a volume here
+ENV DATA_DIR=/data
+
 # Install CPU-only PyTorch FIRST — prevents pyannote from pulling the 3GB GPU version
 RUN pip install --no-cache-dir \
     torch==2.1.2+cpu \
