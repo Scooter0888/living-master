@@ -3,7 +3,7 @@ import "./globals.css";
 import { ThemeProvider } from "@/lib/theme";
 
 export const metadata: Metadata = {
-  title: "Living Master — Preserve Any Mind",
+  title: "Living Master — Their Knowledge. Forever Accessible.",
   description: "Build a Living Master from any public figure's interviews, books, talks, and videos. Ask anything. Hear answers in their own voice.",
 };
 

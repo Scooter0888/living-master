@@ -156,7 +156,7 @@ export default function HomePage() {
                 backgroundClip: "text",
               }}
             >
-              Preserve Any Mind.<br />Build a Living Master.
+              Their Knowledge.<br />Forever Accessible.
             </motion.h1>
 
             {/* Subtitle */}
@@ -169,8 +169,8 @@ export default function HomePage() {
                 lineHeight: 1.7, maxWidth: 440, marginBottom: 40,
               }}
             >
-              Feed it their interviews, books, talks, and videos. Ask anything.
-              Get answers grounded in their real words — in their own voice.
+              Build a Living Master. Feed it their interviews, books, talks, and videos.
+              Ask anything. Get answers grounded in their real words — in their own voice.
             </motion.p>
 
             {/* Feature pills */}
