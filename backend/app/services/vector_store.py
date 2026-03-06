@@ -28,6 +28,19 @@ def _collection_name(master_id: str) -> str:
     return f"master-{master_id.replace('_', '-')}"
 
 
+def _sanitize_metadata(meta: dict) -> dict:
+    """ChromaDB only accepts str/int/float/bool metadata values — strip or convert everything else."""
+    clean = {}
+    for k, v in meta.items():
+        if v is None:
+            continue  # drop None values
+        if isinstance(v, (str, int, float, bool)):
+            clean[k] = v
+        else:
+            clean[k] = str(v)
+    return clean
+
+
 async def add_documents(
     master_id: str,
     source_id: str,
@@ -47,7 +60,7 @@ async def add_documents(
         collection.add(
             ids=ids,
             documents=chunks,
-            metadatas=metadatas,
+            metadatas=[_sanitize_metadata(m) for m in metadatas],
             embeddings=embeddings,
         )
         return len(chunks)

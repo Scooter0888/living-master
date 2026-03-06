@@ -1,13 +1,13 @@
 "use client";
 import { useState, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Link2, Upload, Plus, X, Check, Loader2, Clock } from "lucide-react";
+import { Link2, Upload, Plus, X, Check, Loader2, Clock, FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { api } from "@/lib/api";
 
 interface IngestPanelProps { masterId: string; onIngested: () => void; }
-type Tab = "url" | "file";
+type Tab = "url" | "file" | "local";
 
 interface QueueItem {
   id: string;
@@ -18,17 +18,26 @@ interface QueueItem {
 
 export function IngestPanel({ masterId, onIngested }: IngestPanelProps) {
   const [tab, setTab] = useState<Tab>("url");
+
+  // URL tab
   const [url, setUrl] = useState("");
   const [urlLoading, setUrlLoading] = useState(false);
   const [urlError, setUrlError] = useState("");
   const [urlSuccess, setUrlSuccess] = useState("");
+
+  // File tab
   const [dragging, setDragging] = useState(false);
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const processingRef = useRef(false);
   const queueRef = useRef<QueueItem[]>([]);
 
-  // Keep queueRef in sync with queue state
+  // Local path tab
+  const [localPath, setLocalPath] = useState("");
+  const [localLoading, setLocalLoading] = useState(false);
+  const [localError, setLocalError] = useState("");
+  const [localSuccess, setLocalSuccess] = useState("");
+
   const setQueueSynced = (updater: (prev: QueueItem[]) => QueueItem[]) => {
     setQueue((prev) => {
       const next = updater(prev);
@@ -48,6 +57,17 @@ export function IngestPanel({ masterId, onIngested }: IngestPanelProps) {
     finally { setUrlLoading(false); }
   };
 
+  const handleIngestLocalPath = async () => {
+    if (!localPath.trim()) return;
+    setLocalLoading(true); setLocalError(""); setLocalSuccess("");
+    try {
+      await api.ingest.localPath(masterId, localPath.trim());
+      setLocalSuccess("Queued — processing in background");
+      setTimeout(() => { setLocalSuccess(""); onIngested(); }, 2500);
+    } catch (e: any) { setLocalError(e.message || "Failed to ingest path"); }
+    finally { setLocalLoading(false); }
+  };
+
   const processQueue = useCallback(async () => {
     if (processingRef.current) return;
     processingRef.current = true;
@@ -56,13 +76,11 @@ export function IngestPanel({ masterId, onIngested }: IngestPanelProps) {
       const pending = queueRef.current.find((q) => q.status === "queued");
       if (!pending) break;
 
-      // Mark as uploading
       setQueueSynced((prev) =>
         prev.map((q) => q.id === pending.id ? { ...q, status: "uploading" } : q)
       );
 
       try {
-        // We need the actual File object — store it in a map
         const file = fileMapRef.current.get(pending.id);
         if (!file) throw new Error("File not found");
         const result = await api.ingest.file(masterId, file);
@@ -78,8 +96,6 @@ export function IngestPanel({ masterId, onIngested }: IngestPanelProps) {
       }
 
       fileMapRef.current.delete(pending.id);
-
-      // Small pause between uploads
       await new Promise((r) => setTimeout(r, 300));
     }
 
@@ -92,11 +108,7 @@ export function IngestPanel({ masterId, onIngested }: IngestPanelProps) {
     const id = Math.random().toString(36).slice(2);
     fileMapRef.current.set(id, file);
     const item: QueueItem = { id, name: file.name, status: "queued" };
-    setQueueSynced((prev) => {
-      const next = [...prev, item];
-      return next;
-    });
-    // Trigger processing (will no-op if already running)
+    setQueueSynced((prev) => [...prev, item]);
     setTimeout(() => processQueue(), 0);
   }, [processQueue]);
 
@@ -124,29 +136,35 @@ export function IngestPanel({ masterId, onIngested }: IngestPanelProps) {
     return "var(--text-muted)";
   };
 
+  const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
+    { id: "url", label: "Link", icon: <Link2 size={12} /> },
+    { id: "file", label: "File", icon: <Upload size={12} /> },
+    { id: "local", label: "Local", icon: <FolderOpen size={12} /> },
+  ];
+
   return (
     <div style={{ borderRadius: 18, border: "1px solid var(--border)", background: "var(--surface)", overflow: "hidden", boxShadow: "var(--shadow-sm)" }}>
       {/* Tabs */}
       <div style={{ display: "flex", borderBottom: "1px solid var(--border)", padding: "10px 10px 0" }}>
-        {(["url", "file"] as Tab[]).map((t) => (
-          <button key={t} onClick={() => { setTab(t); setUrlError(""); setUrlSuccess(""); }} style={{
+        {TABS.map((t) => (
+          <button key={t.id} onClick={() => { setTab(t.id); setUrlError(""); setUrlSuccess(""); setLocalError(""); setLocalSuccess(""); }} style={{
             display: "flex", alignItems: "center", gap: 6, padding: "7px 13px",
-            fontSize: 12, fontWeight: tab === t ? 600 : 500,
-            background: tab === t ? "var(--surface-2)" : "transparent",
+            fontSize: 12, fontWeight: tab === t.id ? 600 : 500,
+            background: tab === t.id ? "var(--surface-2)" : "transparent",
             border: "none", borderRadius: "8px 8px 0 0",
-            borderBottom: tab === t ? "2px solid var(--accent)" : "2px solid transparent",
-            color: tab === t ? "var(--text-primary)" : "var(--text-muted)", cursor: "pointer",
+            borderBottom: tab === t.id ? "2px solid var(--accent)" : "2px solid transparent",
+            color: tab === t.id ? "var(--text-primary)" : "var(--text-muted)", cursor: "pointer",
             transition: "color 0.12s",
           }}>
-            {t === "url" ? <Link2 size={12} /> : <Upload size={12} />}
-            {t === "url" ? "Link" : "File"}
+            {t.icon}{t.label}
           </button>
         ))}
       </div>
 
       <div style={{ padding: 16 }}>
         <AnimatePresence mode="wait">
-          {tab === "url" ? (
+
+          {tab === "url" && (
             <motion.div key="url" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }}>
               <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10 }}>YouTube, articles, blog posts — any public URL</p>
               <div style={{ display: "flex", gap: 8 }}>
@@ -178,7 +196,9 @@ export function IngestPanel({ masterId, onIngested }: IngestPanelProps) {
                 )}
               </AnimatePresence>
             </motion.div>
-          ) : (
+          )}
+
+          {tab === "file" && (
             <motion.div key="file" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }}>
               <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 10 }}>MP3 · MP4 · PDF · DOCX · WAV · MKV · VOB · ISO — drop multiple files</p>
               <div onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
@@ -203,7 +223,6 @@ export function IngestPanel({ masterId, onIngested }: IngestPanelProps) {
                   e.target.value = "";
                 }} />
 
-              {/* Upload queue */}
               <AnimatePresence>
                 {queue.length > 0 && (
                   <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}
@@ -243,6 +262,50 @@ export function IngestPanel({ masterId, onIngested }: IngestPanelProps) {
               </AnimatePresence>
             </motion.div>
           )}
+
+          {tab === "local" && (
+            <motion.div key="local" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }}>
+              <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4, lineHeight: 1.6 }}>
+                Paste a path to a local file, DVD folder, or mounted disc — no upload needed.
+              </p>
+              <p style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 10, lineHeight: 1.5, opacity: 0.7 }}>
+                DVD: <code style={{ fontSize: 10, background: "var(--surface-2)", padding: "1px 4px", borderRadius: 3 }}>/Volumes/DISC_NAME</code> or <code style={{ fontSize: 10, background: "var(--surface-2)", padding: "1px 4px", borderRadius: 3 }}>/Volumes/DISC_NAME/VIDEO_TS</code><br />
+                File: <code style={{ fontSize: 10, background: "var(--surface-2)", padding: "1px 4px", borderRadius: 3 }}>/Users/you/Movies/lecture.mp4</code>
+              </p>
+              <div style={{ display: "flex", gap: 8 }}>
+                <Input
+                  placeholder="/Volumes/DISC_NAME or /path/to/file.mp4"
+                  value={localPath}
+                  onChange={(e) => { setLocalPath(e.target.value); setLocalError(""); }}
+                  onKeyDown={(e) => e.key === "Enter" && handleIngestLocalPath()}
+                  style={{ flex: 1, fontFamily: "monospace", fontSize: 11 }}
+                />
+                <Button variant="accent" size="md" loading={localLoading} onClick={handleIngestLocalPath} disabled={!localPath.trim()}>
+                  <Plus size={14} /> Add
+                </Button>
+              </div>
+              <AnimatePresence>
+                {(localError || localSuccess) && (
+                  <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
+                    style={{
+                      marginTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between",
+                      gap: 8, padding: "9px 12px", borderRadius: 8, fontSize: 12,
+                      background: localError ? "var(--color-error-bg)" : "var(--color-success-bg)",
+                      border: `1px solid ${localError ? "var(--color-error-border)" : "var(--color-success-border)"}`,
+                      color: localError ? "var(--color-error)" : "var(--color-success)",
+                    }}>
+                    <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      {localSuccess && <Check size={12} />}{localError || localSuccess}
+                    </span>
+                    <button onClick={() => { setLocalError(""); setLocalSuccess(""); }} style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", opacity: 0.6 }}>
+                      <X size={12} />
+                    </button>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+            </motion.div>
+          )}
+
         </AnimatePresence>
       </div>
 

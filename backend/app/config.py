@@ -37,8 +37,8 @@ class Settings(BaseSettings):
     # Whisper transcription model: "tiny" | "base" | "small" | "medium" | "large"
     whisper_model: str = "base"
 
-    # Max upload file size in megabytes
-    max_upload_mb: int = 500
+    # Max upload file size in megabytes (10 GB default for local; override in production)
+    max_upload_mb: int = 10000
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

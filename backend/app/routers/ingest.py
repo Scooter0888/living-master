@@ -291,6 +291,89 @@ async def ingest_from_file(
     }
 
 
+class IngestLocalPathRequest(BaseModel):
+    path: str
+
+
+@router.post("/local-path", status_code=202)
+async def ingest_from_local_path(
+    master_id: str,
+    body: IngestLocalPathRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """Ingest a local file or DVD folder without uploading. Useful for large files (DVDs, ISOs)."""
+    result = await db.execute(select(Master).where(Master.id == master_id))
+    master = result.scalar_one_or_none()
+    if not master:
+        raise HTTPException(status_code=404, detail="Master not found")
+
+    path = body.path.strip()
+    if not os.path.exists(path):
+        raise HTTPException(status_code=400, detail=f"Path not found: {path}")
+
+    # Determine what kind of path this is
+    is_dvd_folder = os.path.isdir(path)
+    if is_dvd_folder:
+        display_title = os.path.basename(path.rstrip("/")) or path
+        content_type = ContentType.video
+    else:
+        fname = os.path.basename(path)
+        content_type_str = detect_content_type(fname)
+        try:
+            content_type = ContentType(content_type_str)
+        except ValueError:
+            content_type = ContentType.video
+        display_title = fname
+
+    source = Source(
+        id=str(uuid.uuid4()),
+        master_id=master_id,
+        url=None,
+        title=display_title,
+        content_type=content_type,
+        status=IngestionStatus.pending,
+    )
+    db.add(source)
+    await db.commit()
+    await db.refresh(source)
+
+    async def _ingest_local():
+        from app.database import AsyncSessionLocal
+        try:
+            if is_dvd_folder:
+                from app.services.ingestion.dvd import ingest_dvd_folder
+                ingested = await ingest_dvd_folder(path)
+            else:
+                ingested = await ingest_file(path, display_title)
+            await _process_source(
+                source_id=source.id,
+                master_id=master_id,
+                db_session_factory=AsyncSessionLocal,
+                content=ingested,
+            )
+        except Exception as e:
+            err_str = str(e)
+            async with AsyncSessionLocal() as db2:
+                r = await db2.execute(select(Source).where(Source.id == source.id))
+                src = r.scalar_one_or_none()
+                if src:
+                    if _is_empty_content_error(err_str):
+                        await db2.delete(src)
+                    else:
+                        src.status = IngestionStatus.failed
+                        src.error_message = err_str
+                    await db2.commit()
+
+    background_tasks.add_task(_ingest_local)
+
+    return {
+        "source_id": source.id,
+        "status": "processing",
+        "message": f"Processing {display_title}",
+    }
+
+
 @router.post("/sources/{source_id}/reingest", status_code=202)
 async def reingest_source(
     master_id: str,

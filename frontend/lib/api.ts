@@ -179,6 +179,11 @@ export const api = {
       request<{ source_id: string; status: string }>(`/masters/${masterId}/ingest/sources/${sourceId}/reingest`, {
         method: "POST",
       }),
+    localPath: (masterId: string, path: string) =>
+      request<{ source_id: string; status: string }>(`/masters/${masterId}/ingest/local-path`, {
+        method: "POST",
+        body: JSON.stringify({ path }),
+      }),
   },
 
   sources: {
