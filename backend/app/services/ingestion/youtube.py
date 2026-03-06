@@ -24,7 +24,7 @@ _YTDLP_BASE = {
     "quiet": True,
     "no_warnings": True,
     "http_headers": _YT_HEADERS,
-    "extractor_args": {"youtube": {"player_client": ["tv_embedded", "web"]}},
+    "extractor_args": {"youtube": {"player_client": ["ios", "mweb", "web"]}},
     "socket_timeout": 30,
 }
 

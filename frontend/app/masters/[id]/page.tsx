@@ -235,7 +235,7 @@ export default function MasterPage() {
       </header>
 
       {/* Content */}
-      <main style={{ flex: 1, maxWidth: tab === "sources" ? 1200 : 1000, margin: "0 auto", width: "100%", padding: "28px 32px" }} className="page-container">
+      <main style={{ flex: 1, maxWidth: (tab === "sources" || tab === "knowledge") ? 1200 : 1000, margin: "0 auto", width: "100%", padding: "28px 32px" }} className="page-container">
         <AnimatePresence mode="wait">
 
           {tab === "chat" && (
