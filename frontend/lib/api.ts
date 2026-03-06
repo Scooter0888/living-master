@@ -184,6 +184,10 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ path }),
       }),
+    retryAllFailed: (masterId: string) =>
+      request<{ retried: number; message: string }>(`/masters/${masterId}/ingest/retry-failed`, {
+        method: "POST",
+      }),
   },
 
   sources: {

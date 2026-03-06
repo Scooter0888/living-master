@@ -159,12 +159,43 @@ async def ingest_from_url(
     if not master:
         raise HTTPException(status_code=404, detail="Master not found")
 
-    # Reject duplicate URLs for the same master
-    existing = await db.execute(
+    # If this URL already exists and failed, auto-reingest it instead of blocking
+    existing_result = await db.execute(
         select(Source).where(Source.master_id == master_id, Source.url == body.url)
     )
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=409, detail="This URL has already been added to this master")
+    existing_source = existing_result.scalar_one_or_none()
+    if existing_source:
+        if existing_source.status == IngestionStatus.failed:
+            # Reuse existing source record — reset and retry
+            await delete_source_chunks(master_id, existing_source.id)
+            existing_source.status = IngestionStatus.pending
+            existing_source.error_message = None
+            existing_source.chunk_count = 0
+            existing_source.word_count = 0
+            await db.commit()
+            reuse_id = existing_source.id
+            reuse_url = body.url
+
+            async def _retry_existing():
+                from app.database import AsyncSessionLocal
+                try:
+                    ingested = await ingest_url(reuse_url)
+                    await _process_source(source_id=reuse_id, master_id=master_id,
+                                          db_session_factory=AsyncSessionLocal, content=ingested)
+                except Exception as e:
+                    err_str = str(e)
+                    async with AsyncSessionLocal() as db2:
+                        r = await db2.execute(select(Source).where(Source.id == reuse_id))
+                        src = r.scalar_one_or_none()
+                        if src:
+                            src.status = IngestionStatus.failed
+                            src.error_message = err_str
+                            await db2.commit()
+
+            background_tasks.add_task(_retry_existing)
+            return {"source_id": reuse_id, "status": "processing", "message": f"Retrying {reuse_url}"}
+        else:
+            raise HTTPException(status_code=409, detail="This URL has already been added to this master")
 
     content_type_str = detect_content_type(body.url)
     try:
@@ -372,6 +403,59 @@ async def ingest_from_local_path(
         "status": "processing",
         "message": f"Processing {display_title}",
     }
+
+
+@router.post("/retry-failed", status_code=202)
+async def retry_all_failed(
+    master_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """Reset all failed URL sources and re-queue them for ingestion."""
+    result = await db.execute(
+        select(Source).where(
+            Source.master_id == master_id,
+            Source.status == IngestionStatus.failed,
+            Source.url.isnot(None),
+        )
+    )
+    failed_sources = result.scalars().all()
+    if not failed_sources:
+        return {"retried": 0, "message": "No failed URL sources to retry"}
+
+    source_ids_urls = [(s.id, s.url) for s in failed_sources]
+
+    # Reset all at once
+    for s in failed_sources:
+        s.status = IngestionStatus.pending
+        s.error_message = None
+        s.chunk_count = 0
+        s.word_count = 0
+    await db.commit()
+
+    async def _retry_all():
+        from app.database import AsyncSessionLocal
+        import asyncio
+        for source_id, url in source_ids_urls:
+            try:
+                await delete_source_chunks(master_id, source_id)
+                ingested = await ingest_url(url)
+                await _process_source(source_id=source_id, master_id=master_id,
+                                      db_session_factory=AsyncSessionLocal, content=ingested)
+            except Exception as e:
+                err_str = str(e)
+                async with AsyncSessionLocal() as db2:
+                    r = await db2.execute(select(Source).where(Source.id == source_id))
+                    src = r.scalar_one_or_none()
+                    if src:
+                        src.status = IngestionStatus.failed
+                        src.error_message = err_str
+                        await db2.commit()
+            # Small delay between requests to avoid rate limiting
+            await asyncio.sleep(1)
+
+    background_tasks.add_task(_retry_all)
+    return {"retried": len(source_ids_urls), "message": f"Retrying {len(source_ids_urls)} failed sources"}
 
 
 @router.post("/sources/{source_id}/reingest", status_code=202)

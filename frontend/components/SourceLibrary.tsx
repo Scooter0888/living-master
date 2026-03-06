@@ -53,6 +53,7 @@ function StatusIcon({ status }: { status: Source["status"] }) {
 export function SourceLibrary({ sources, masterId, masterName = "Master", onDeleted, onRefresh, initialViewSource }: SourceLibraryProps) {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [reingestingId, setReingestingId] = useState<string | null>(null);
+  const [retryingAll, setRetryingAll] = useState(false);
   const [viewingSource, setViewingSource] = useState<Source | null>(initialViewSource ?? null);
   const [speakerSource, setSpeakerSource] = useState<Source | null>(null);
   const [analysingId, setAnalysingId] = useState<string | null>(null);
@@ -77,6 +78,13 @@ export function SourceLibrary({ sources, masterId, masterName = "Master", onDele
     try { await api.ingest.reingestSource(masterId, source.id); setTimeout(onRefresh, 500); }
     catch (e) { console.error(e); }
     finally { setReingestingId(null); }
+  };
+
+  const handleRetryAllFailed = async () => {
+    setRetryingAll(true);
+    try { await api.ingest.retryAllFailed(masterId); setTimeout(onRefresh, 800); }
+    catch (e) { console.error(e); }
+    finally { setRetryingAll(false); }
   };
 
   const handleAnalyseMovements = async (source: Source) => {
@@ -109,6 +117,22 @@ export function SourceLibrary({ sources, masterId, masterName = "Master", onDele
             {failed > 0 && <><span style={{ margin: "0 4px", opacity: 0.4 }}>·</span><span style={{ color: "var(--color-error)", fontWeight: 600 }}>{failed}</span> failed</>}
             {active > 0 && <><span style={{ margin: "0 4px", opacity: 0.4 }}>·</span><span style={{ color: "var(--color-info)", fontWeight: 600 }}>{active}</span> processing</>}
           </span>
+          {failed > 0 && (
+            <button
+              onClick={handleRetryAllFailed}
+              disabled={retryingAll}
+              style={{
+                display: "flex", alignItems: "center", gap: 5,
+                padding: "4px 10px", borderRadius: 7, fontSize: 11, fontWeight: 600,
+                background: "var(--color-error-bg)", border: "1px solid rgba(248,113,113,0.25)",
+                color: "var(--color-error)", cursor: retryingAll ? "not-allowed" : "pointer",
+                opacity: retryingAll ? 0.6 : 1, transition: "opacity 0.15s",
+              }}
+            >
+              <RotateCcw size={11} style={{ animation: retryingAll ? "spin 1s linear infinite" : "none" }} />
+              {retryingAll ? "Retrying…" : `Retry all ${failed} failed`}
+            </button>
+          )}
         </div>
         <button onClick={onRefresh} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", display: "flex", padding: 4, borderRadius: 6 }}>
           <RefreshCw size={12} style={{ animation: hasProcessing ? "spin 1.5s linear infinite" : "none" }} />
