@@ -79,6 +79,9 @@ class Source(Base):
     has_diarization = Column(Boolean, default=False)
     speaker_count = Column(Integer, nullable=True)
     speaker_samples_json = Column(Text, nullable=True)  # JSON: {SPEAKER_00: ["quote1","quote2"], ...}
+    # Processing stage and progress (set during ingestion for user-visible progress)
+    processing_stage = Column(String, nullable=True)  # e.g. "Downloading", "Transcribing", "Indexing"
+    progress_pct = Column(Integer, nullable=True)     # 0–100 progress percentage
     # Movement analysis
     has_movement_analysis = Column(Boolean, default=False)
     # For speech+movement fusion

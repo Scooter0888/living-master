@@ -238,4 +238,6 @@ def _serialize_source(source: Source) -> dict:
         "speaker_label": source.speaker_label,
         "has_movement_analysis": source.has_movement_analysis or False,
         "speaker_samples": speaker_samples,
+        "processing_stage": source.processing_stage,
+        "progress_pct": source.progress_pct,
     }

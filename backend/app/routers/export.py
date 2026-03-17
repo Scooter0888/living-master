@@ -2,6 +2,8 @@
 Export router: knowledge stats + AI-generated book/knowledge-base compilation + PDF + movement.
 """
 import os
+import shutil
+import tempfile
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from fastapi.responses import StreamingResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -243,7 +245,10 @@ async def analyse_movements(
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
-    """Trigger movement analysis for a video source using Claude Vision."""
+    """Trigger movement analysis for a video source using Claude Vision.
+    Uploaded video files: must still be on disk.
+    YouTube sources: video is downloaded temporarily, analysed, then deleted.
+    """
     result = await db.execute(
         select(Source).where(Source.id == source_id, Source.master_id == master_id)
     )
@@ -251,21 +256,26 @@ async def analyse_movements(
     if not source:
         raise HTTPException(status_code=404, detail="Source not found")
 
-    if source.content_type.value not in ("video", "youtube"):
+    content_type_val = source.content_type.value if hasattr(source.content_type, "value") else str(source.content_type)
+    if content_type_val not in ("video", "youtube"):
         raise HTTPException(status_code=400, detail="Movement analysis only supported for video sources")
 
     result_master = await db.execute(select(Master).where(Master.id == master_id))
     master = result_master.scalar_one_or_none()
 
-    # Grab video path and transcript segments before background task
+    is_youtube = content_type_val == "youtube" and bool(source.url)
     video_path = source.video_path
-    raw_segments_json = source.transcript_segments_json
+    has_local_file = bool(video_path and os.path.exists(video_path))
 
-    if not video_path or not os.path.exists(video_path):
+    if not has_local_file and not is_youtube:
         raise HTTPException(
             status_code=422,
             detail="Video file not found on disk. Re-upload the video to enable movement analysis."
         )
+
+    raw_segments_json = source.transcript_segments_json
+    source_url = source.url
+    source_title = source.title or "Untitled"
 
     async def _analyse():
         import json as _json
@@ -274,51 +284,114 @@ async def analyse_movements(
         from app.services.embeddings import embed_texts
         from app.services.vector_store import add_documents
 
-        # Load stored transcript segments for speech+vision fusion
-        transcript_segments = []
-        if raw_segments_json:
-            try:
-                transcript_segments = _json.loads(raw_segments_json)
-            except Exception:
-                pass
+        yt_tmpdir = None
+        resolved_video_path = video_path
 
-        async with AsyncSessionLocal() as db2:
-            result2 = await db2.execute(select(Source).where(Source.id == source_id))
-            src = result2.scalar_one_or_none()
-            if not src:
+        try:
+            if not has_local_file and is_youtube:
+                try:
+                    yt_tmpdir = tempfile.mkdtemp(prefix="yt_movement_")
+                    resolved_video_path = await _download_yt_video_for_analysis(source_url, yt_tmpdir)
+                    print(f"[Movement] Downloaded YouTube video to {resolved_video_path}")
+                except Exception as e:
+                    print(f"[Movement] YouTube download failed: {e}")
+                    return
+
+            if not resolved_video_path or not os.path.exists(resolved_video_path):
+                print(f"[Movement] Video file unavailable: {resolved_video_path}")
                 return
-            try:
-                master_name = master.name if master else "Unknown"
-                movements = await analyse_video_movements(
-                    video_path,
-                    master_name,
-                    transcript_segments=transcript_segments,
-                )
-                if movements:
-                    texts = [m["text"] for m in movements]
-                    embeddings = await embed_texts(texts)
-                    metadatas = [
-                        {
-                            "source_id": source_id,
-                            "master_id": master_id,
-                            "title": f"{src.title} — Movement Analysis",
-                            "url": src.url or "",
-                            "content_type": "movement_analysis",
-                            "chunk_index": m["chunk_index"],
-                            "timestamp": m["timestamp"],
-                        }
-                        for m in movements
-                    ]
-                    await add_documents(master_id, f"{source_id}-movements", texts, metadatas, embeddings)
-                    src.has_movement_analysis = True
-                    src.chunk_count = (src.chunk_count or 0) + len(movements)
-                    await db2.commit()
-                    print(f"[Movement] Added {len(movements)} fused speech+vision chunks for source {source_id}")
-            except Exception as e:
-                print(f"[Movement] Analysis failed: {e}")
 
+            transcript_segments = []
+            if raw_segments_json:
+                try:
+                    transcript_segments = _json.loads(raw_segments_json)
+                except Exception:
+                    pass
+
+            async with AsyncSessionLocal() as db2:
+                result2 = await db2.execute(select(Source).where(Source.id == source_id))
+                src = result2.scalar_one_or_none()
+                if not src:
+                    return
+                try:
+                    master_name = master.name if master else "Unknown"
+                    movements = await analyse_video_movements(
+                        resolved_video_path,
+                        master_name,
+                        transcript_segments=transcript_segments,
+                    )
+                    if movements:
+                        texts = [m["text"] for m in movements]
+                        embeddings = await embed_texts(texts)
+                        metadatas = [
+                            {
+                                "source_id": source_id,
+                                "master_id": master_id,
+                                "title": f"{source_title} — Movement Analysis",
+                                "url": source_url or "",
+                                "content_type": "movement_analysis",
+                                "chunk_index": m["chunk_index"],
+                                "timestamp": m["timestamp"],
+                            }
+                            for m in movements
+                        ]
+                        await add_documents(master_id, f"{source_id}-movements", texts, metadatas, embeddings)
+                        src.has_movement_analysis = True
+                        src.chunk_count = (src.chunk_count or 0) + len(movements)
+                        await db2.commit()
+                        print(f"[Movement] Added {len(movements)} fused speech+vision chunks for source {source_id}")
+                    else:
+                        print(f"[Movement] No movement chunks produced for source {source_id}")
+                except Exception as e:
+                    print(f"[Movement] Analysis failed: {e}")
+        finally:
+            if yt_tmpdir and os.path.isdir(yt_tmpdir):
+                shutil.rmtree(yt_tmpdir, ignore_errors=True)
+
+    msg = (
+        "Downloading YouTube video and starting movement analysis…"
+        if (not has_local_file and is_youtube)
+        else "Movement analysis started — speech and vision will be fused"
+    )
     background_tasks.add_task(_analyse)
-    return {"status": "processing", "message": "Movement analysis started — speech and vision will be fused"}
+    return {"status": "processing", "message": msg}
+
+
+async def _download_yt_video_for_analysis(url: str, tmpdir: str) -> str:
+    """Download a YouTube video to tmpdir for movement analysis. Returns path to the video file."""
+    import asyncio
+    import yt_dlp
+
+    loop = asyncio.get_event_loop()
+
+    def _download():
+        ydl_opts = {
+            "quiet": True,
+            "no_warnings": True,
+            "http_headers": {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+            "extractor_args": {"youtube": {"player_client": ["ios", "mweb", "web"]}},
+            "socket_timeout": 60,
+            "format": "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best[ext=mp4]/best",
+            "merge_output_format": "mp4",
+            "outtmpl": os.path.join(tmpdir, "video.%(ext)s"),
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+
+    await loop.run_in_executor(None, _download)
+
+    for fname in os.listdir(tmpdir):
+        if fname.startswith("video."):
+            return os.path.join(tmpdir, fname)
+
+    raise RuntimeError("YouTube video download produced no output file")
 
 
 @router.get("/topics/stream")

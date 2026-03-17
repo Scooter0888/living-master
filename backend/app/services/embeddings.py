@@ -48,9 +48,9 @@ async def embed_texts(texts: list[str]) -> list[list[float]]:
 
     for i in range(0, len(texts), batch_size):
         batch = texts[i: i + batch_size]
-        response = await client.embeddings.create(
-            model=settings.embedding_model,
-            input=batch,
+        response = await asyncio.wait_for(
+            client.embeddings.create(model=settings.embedding_model, input=batch),
+            timeout=60.0,  # 60s per batch — prevents silent hang if connection drops
         )
         batch_embeddings = [item.embedding for item in response.data]
         all_embeddings.extend(batch_embeddings)

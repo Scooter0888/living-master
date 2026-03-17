@@ -183,7 +183,7 @@ async def _ingest_via_ytdlp_captions(video_id: str, url: str) -> IngestedContent
 async def _ingest_via_whisper(url: str, video_id: str) -> IngestedContent:
     import yt_dlp
     import tempfile, os
-    from app.services.transcription import transcribe_audio
+    from app.services.transcription import transcribe_with_segments
 
     loop = asyncio.get_event_loop()
 
@@ -191,8 +191,14 @@ async def _ingest_via_whisper(url: str, video_id: str) -> IngestedContent:
         def _download():
             ydl_opts = {
                 **_YTDLP_BASE,
-                "format": "bestaudio/best",
+                # Broad format selector: try m4a first (no re-encode needed), fall back to
+                # any audio-only stream, then any format at all — avoids "format not available"
+                # errors on older/regional videos that only have limited format options.
+                "format": "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
                 "outtmpl": os.path.join(tmpdir, "audio.%(ext)s"),
+                # Remove extractor_args client lock for the download — let yt-dlp pick the
+                # client that can actually serve this video's available formats.
+                "extractor_args": {},
                 "postprocessors": [{
                     "key": "FFmpegExtractAudio",
                     "preferredcodec": "mp3",
@@ -213,7 +219,15 @@ async def _ingest_via_whisper(url: str, video_id: str) -> IngestedContent:
         if not audio_path:
             raise RuntimeError("Audio extraction failed")
 
-        text = await transcribe_audio(audio_path)
+        text, transcript_segments = await transcribe_with_segments(audio_path)
+
+        # Optional speaker diarization
+        diar_segments = []
+        try:
+            from app.services.diarization import diarize
+            diar_segments = await diarize(audio_path, transcript_text=text, transcript_segments=transcript_segments)
+        except Exception as e:
+            print(f"[YouTube Whisper] Diarization skipped: {e}")
 
     return IngestedContent(
         text=text,
@@ -224,4 +238,6 @@ async def _ingest_via_whisper(url: str, video_id: str) -> IngestedContent:
         thumbnail_url=info.get("thumbnail"),
         duration_seconds=info.get("duration"),
         metadata={"video_id": video_id, "transcription_method": "whisper"},
+        segments=diar_segments,
+        transcript_segments=transcript_segments,
     )

@@ -22,3 +22,5 @@ class IngestedContent:
     # Pre-computed fused speech+vision chunks from movement analysis
     # [{timestamp, text, chunk_index, spoken, physical}]
     movement_chunks: list = field(default_factory=list)
+    # The detected master speaker ID (e.g. "SPEAKER_00") — the Russian-speaking voice
+    speaker_label: Optional[str] = None

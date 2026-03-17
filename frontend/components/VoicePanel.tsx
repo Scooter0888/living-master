@@ -29,6 +29,7 @@ export function VoicePanel({ master, onVoiceReady }: VoicePanelProps) {
   const [cloning, setCloning] = useState(false);
   const [cloneError, setCloneError] = useState("");
   const [cloneMessage, setCloneMessage] = useState("");
+  const [selectError, setSelectError] = useState("");
 
   const refreshStatus = useCallback(async () => {
     try {
@@ -64,12 +65,13 @@ export function VoicePanel({ master, onVoiceReady }: VoicePanelProps) {
 
   const handleSelectVoice = async (voiceId: string) => {
     setSelecting(true);
+    setSelectError("");
     try {
       await api.voice.selectVoice(master.id, voiceId);
       setSelectedVoiceId(voiceId);
       await refreshStatus();
     } catch (e: any) {
-      console.error("Select voice failed:", e);
+      setSelectError(e.message || "Failed to select voice");
     } finally {
       setSelecting(false);
     }
@@ -170,6 +172,18 @@ export function VoicePanel({ master, onVoiceReady }: VoicePanelProps) {
           <p style={{ fontSize: 11.5, color: "var(--text-muted)", marginBottom: 12, lineHeight: 1.5 }}>
             Choose a free preset voice. Click ▶ to preview. Click the row to select.
           </p>
+
+          {selectError && (
+            <div style={{
+              display: "flex", alignItems: "flex-start", gap: 6,
+              padding: "8px 10px", borderRadius: 8, marginBottom: 10,
+              background: "var(--color-error-bg)", border: "1px solid rgba(248,113,113,0.2)",
+              color: "var(--color-error)", fontSize: 11.5, lineHeight: 1.5,
+            }}>
+              <AlertCircle size={12} style={{ flexShrink: 0, marginTop: 1 }} />
+              {selectError}
+            </div>
+          )}
 
           {voicesLoading ? (
             <div style={{ display: "flex", justifyContent: "center", padding: 16 }}>

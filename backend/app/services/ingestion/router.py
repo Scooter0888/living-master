@@ -53,7 +53,7 @@ async def ingest_url(url: str) -> IngestedContent:
     raise ValueError(f"Cannot ingest URL with content type '{content_type}'. Use file upload instead.")
 
 
-async def ingest_file(file_path: str, original_filename: str) -> IngestedContent:
+async def ingest_file(file_path: str, original_filename: str, run_movement_analysis: bool = False) -> IngestedContent:
     content_type = detect_content_type(original_filename)
 
     if content_type == "audio":
@@ -62,7 +62,7 @@ async def ingest_file(file_path: str, original_filename: str) -> IngestedContent
 
     if content_type == "video":
         from app.services.ingestion.video import ingest_video
-        return await ingest_video(file_path, original_filename)
+        return await ingest_video(file_path, original_filename, run_movement_analysis=run_movement_analysis)
 
     if content_type == "pdf":
         from app.services.ingestion.pdf import ingest_pdf

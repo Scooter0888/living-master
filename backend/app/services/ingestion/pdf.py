@@ -13,12 +13,33 @@ async def ingest_pdf(file_path: str, original_filename: str) -> IngestedContent:
     loop = asyncio.get_event_loop()
 
     def _extract():
-        import pdfplumber
+        # Try pdfplumber first — best layout preservation.
+        # Some PDFs with unusual font/annotation structures cause a KeyError ('_type')
+        # in pdfplumber's internals; fall back to pymupdf (fitz) for those.
+        try:
+            import pdfplumber
+            pages = []
+            with pdfplumber.open(file_path) as pdf:
+                for page in pdf.pages:
+                    try:
+                        text = page.extract_text()
+                        if text:
+                            pages.append(text.strip())
+                    except Exception:
+                        continue  # skip malformed page, keep going
+            if pages:
+                return "\n\n".join(pages)
+            # pdfplumber returned nothing — fall through to pymupdf
+        except Exception as e:
+            print(f"[PDF] pdfplumber failed ({e}), trying pymupdf")
+
+        # pymupdf fallback — handles encrypted/malformed PDFs more robustly
+        import fitz  # pymupdf
         pages = []
-        with pdfplumber.open(file_path) as pdf:
-            for page in pdf.pages:
-                text = page.extract_text()
-                if text:
+        with fitz.open(file_path) as doc:
+            for page in doc:
+                text = page.get_text()
+                if text and text.strip():
                     pages.append(text.strip())
         return "\n\n".join(pages)
 

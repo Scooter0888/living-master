@@ -58,6 +58,8 @@ export interface Source {
   speaker_label?: string;
   has_movement_analysis?: boolean;
   speaker_samples?: Record<string, string[]>;
+  processing_stage?: string;
+  progress_pct?: number;
 }
 
 export interface Photo {
@@ -99,6 +101,13 @@ export interface DiscoveryItem {
   author?: string;
 }
 
+export interface TranscriptSegment {
+  text: string;
+  start: number;
+  end: number;
+  speaker?: string;
+}
+
 export interface TranscriptResponse {
   source_id: string;
   title: string;
@@ -110,6 +119,17 @@ export interface TranscriptResponse {
   pages_estimate: number;
   chunk_count: number;
   text: string;
+  segments?: TranscriptSegment[];
+  speaker_label?: string;
+  has_diarization?: boolean;
+}
+
+export interface Capabilities {
+  diarization: boolean;
+  voice_cloning: boolean;
+  movement_analysis: boolean;
+  tts: boolean;
+  rag: boolean;
 }
 
 export interface KnowledgeStats {
@@ -161,9 +181,10 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ url }),
       }),
-    file: (masterId: string, file: File) => {
+    file: (masterId: string, file: File, analyseMovements = false) => {
       const form = new FormData();
       form.append("file", file);
+      form.append("analyse_movements", analyseMovements ? "1" : "0");
       return fetch(`${API_BASE}/masters/${masterId}/ingest/file`, {
         method: "POST",
         headers: ACCESS_TOKEN ? { "X-Access-Token": ACCESS_TOKEN } : {},
@@ -179,20 +200,29 @@ export const api = {
       request<{ source_id: string; status: string }>(`/masters/${masterId}/ingest/sources/${sourceId}/reingest`, {
         method: "POST",
       }),
-    localPath: (masterId: string, path: string) =>
+    localPath: (masterId: string, path: string, analyseMovements = false) =>
       request<{ source_id: string; status: string }>(`/masters/${masterId}/ingest/local-path`, {
         method: "POST",
-        body: JSON.stringify({ path }),
+        body: JSON.stringify({ path, analyse_movements: analyseMovements }),
       }),
     retryAllFailed: (masterId: string) =>
       request<{ retried: number; message: string }>(`/masters/${masterId}/ingest/retry-failed`, {
         method: "POST",
       }),
+    scanLocal: (masterId: string) =>
+      request<{ sources: { label: string; path: string; type: string; detail: string }[] }>(
+        `/masters/${masterId}/ingest/scan-local`
+      ),
   },
 
   sources: {
     getStatus: (sourceId: string) => request<Source>(`/sources/${sourceId}/status`),
     getTranscript: (sourceId: string) => request<TranscriptResponse>(`/sources/${sourceId}/transcript`),
+    translate: (sourceId: string, targetLanguage: string) =>
+      request<{ source_id: string; target_language: string; text: string; segments: TranscriptSegment[] }>(
+        `/sources/${sourceId}/translate`,
+        { method: "POST", body: JSON.stringify({ target_language: targetLanguage }) }
+      ),
   },
 
   media: {
@@ -328,6 +358,8 @@ export const api = {
       }
     },
   },
+
+  capabilities: () => request<Capabilities>("/capabilities"),
 
   discover: {
     search: (name: string, maxPerCategory = 10, context = "") =>

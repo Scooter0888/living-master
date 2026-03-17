@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, MessageSquare, Database, Search, BookOpen, Image, Trash2 } from "lucide-react";
+import { ArrowLeft, MessageSquare, Database, Search, BookOpen, Image, Trash2, ScrollText } from "lucide-react";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { MasterAvatar } from "@/components/MasterAvatar";
 import { ChatInterface } from "@/components/ChatInterface";
@@ -13,16 +13,18 @@ import { DiscoveryPanel } from "@/components/DiscoveryPanel";
 import { KnowledgePanel } from "@/components/KnowledgePanel";
 import { PhotoGallery } from "@/components/PhotoGallery";
 import { VoicePanel } from "@/components/VoicePanel";
-import { api, Master } from "@/lib/api";
+import { TranscriptViewer } from "@/components/TranscriptViewer";
+import { api, Master, Source, Capabilities } from "@/lib/api";
 
-type Tab = "chat" | "sources" | "discover" | "knowledge" | "media";
+type Tab = "chat" | "sources" | "discover" | "knowledge" | "media" | "transcripts";
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
-  { id: "chat",      label: "Chat",      icon: <MessageSquare size={13} /> },
-  { id: "sources",   label: "Sources",   icon: <Database size={13} /> },
-  { id: "discover",  label: "Discover",  icon: <Search size={13} /> },
-  { id: "knowledge", label: "Knowledge", icon: <BookOpen size={13} /> },
-  { id: "media",     label: "Media",     icon: <Image size={13} /> },
+  { id: "chat",        label: "Chat",        icon: <MessageSquare size={13} /> },
+  { id: "sources",     label: "Sources",     icon: <Database size={13} /> },
+  { id: "discover",    label: "Discover",    icon: <Search size={13} /> },
+  { id: "knowledge",   label: "Knowledge",   icon: <BookOpen size={13} /> },
+  { id: "media",       label: "Media",       icon: <Image size={13} /> },
+  { id: "transcripts", label: "Transcripts", icon: <ScrollText size={13} /> },
 ];
 
 export default function MasterPage() {
@@ -35,16 +37,31 @@ export default function MasterPage() {
   const [tab, setTab] = useState<Tab>("chat");
   const [deleting, setDeleting] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [capabilities, setCapabilities] = useState<Capabilities | null>(null);
+  const [processingCount, setProcessingCount] = useState(0);
+  const [completedCount, setCompletedCount] = useState(0);
+  const [transcriptSource, setTranscriptSource] = useState<Source | null>(null);
 
   const fetchMaster = useCallback(async () => {
     try {
       const data = await api.masters.get(masterId);
       setMaster(data);
+      const sources = data.sources || [];
+      setProcessingCount(sources.filter(s => s.status === "processing" || s.status === "pending").length);
+      setCompletedCount(sources.filter(s => s.status === "completed").length);
     } catch (e) { console.error(e); }
     finally { setLoading(false); }
   }, [masterId]);
 
   useEffect(() => { fetchMaster(); }, [fetchMaster]);
+  useEffect(() => { api.capabilities().then(setCapabilities).catch(() => {}); }, []);
+
+  // Auto-refresh every 5s while anything is processing
+  useEffect(() => {
+    if (processingCount === 0) return;
+    const interval = setInterval(fetchMaster, 5000);
+    return () => clearInterval(interval);
+  }, [processingCount, fetchMaster]);
 
   const handleDelete = async () => {
     if (!master) return;
@@ -205,6 +222,23 @@ export default function MasterPage() {
             )}
           </div>
 
+          {/* Processing banner — visible on all tabs */}
+          {processingCount > 0 && (
+            <div style={{
+              display: "flex", alignItems: "center", gap: 8,
+              padding: "6px 0", borderTop: "1px solid var(--border)",
+              background: "rgba(59,130,246,0.04)",
+            }}>
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--color-info)", flexShrink: 0, animation: "pulse 1.5s ease-in-out infinite" }} />
+              <span style={{ fontSize: 11.5, color: "var(--color-info)", fontWeight: 500 }}>
+                {processingCount} source{processingCount !== 1 ? "s" : ""} processing…
+              </span>
+              <span style={{ fontSize: 11, color: "var(--text-muted)", marginLeft: 2 }}>
+                {completedCount} completed · refreshing automatically
+              </span>
+            </div>
+          )}
+
           {/* Tabs — underline indicator style */}
           <div style={{ display: "flex", gap: 0, borderTop: "1px solid var(--border)" }}>
             {TABS.map((t) => (
@@ -296,8 +330,116 @@ export default function MasterPage() {
             </motion.div>
           )}
 
+          {tab === "transcripts" && (
+            <motion.div key="transcripts" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }}>
+              <div style={{ maxWidth: 720, margin: "0 auto" }}>
+                <div style={{ marginBottom: 24 }}>
+                  <h2 style={{ fontSize: 18, fontWeight: 800, color: "var(--text-primary)", letterSpacing: "-0.03em", marginBottom: 6 }}>Transcripts</h2>
+                  <p style={{ fontSize: 13, color: "var(--text-muted)", lineHeight: 1.55 }}>
+                    Full text and speaker-labelled transcripts for each ingested source.
+                  </p>
+                </div>
+
+                {(master.sources || []).filter(s => s.status === "completed").length === 0 ? (
+                  <div style={{ textAlign: "center", paddingTop: 60, color: "var(--text-muted)", fontSize: 13 }}>
+                    No completed sources yet. Add content in the Sources tab.
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                    {(master.sources || [])
+                      .filter(s => s.status === "completed")
+                      .map(source => (
+                        <button
+                          key={source.id}
+                          onClick={() => setTranscriptSource(source)}
+                          style={{
+                            display: "flex", alignItems: "center", gap: 14,
+                            padding: "14px 18px", borderRadius: 12,
+                            background: "var(--surface)", border: "1px solid var(--border)",
+                            cursor: "pointer", textAlign: "left",
+                            transition: "border-color 0.12s, background 0.12s",
+                            width: "100%",
+                          }}
+                          onMouseOver={e => {
+                            e.currentTarget.style.borderColor = "var(--accent)";
+                            e.currentTarget.style.background = "var(--surface-2)";
+                          }}
+                          onMouseOut={e => {
+                            e.currentTarget.style.borderColor = "var(--border)";
+                            e.currentTarget.style.background = "var(--surface)";
+                          }}
+                        >
+                          <ScrollText size={16} style={{ color: "var(--accent)", flexShrink: 0 }} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{
+                              fontSize: 13.5, fontWeight: 600, color: "var(--text-primary)",
+                              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                              marginBottom: 3,
+                            }}>
+                              {source.title && !source.title.startsWith("http") ? source.title : source.url || "Untitled"}
+                            </div>
+                            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                              {source.author && (
+                                <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>by {source.author}</span>
+                              )}
+                              {source.chunk_count != null && (
+                                <span style={{ fontSize: 11.5, color: "var(--text-muted)" }}>{source.chunk_count} chunks</span>
+                              )}
+                              {source.has_diarization && (
+                                <span style={{
+                                  fontSize: 11, fontWeight: 600, padding: "1px 7px", borderRadius: 20,
+                                  background: "rgba(99,102,241,0.08)", border: "1px solid rgba(99,102,241,0.2)",
+                                  color: "#6366f1",
+                                }}>
+                                  {source.speaker_count ? `${source.speaker_count} speakers` : "Diarized"}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <span style={{ fontSize: 11.5, color: "var(--accent)", fontWeight: 500, flexShrink: 0 }}>View →</span>
+                        </button>
+                      ))}
+                  </div>
+                )}
+              </div>
+
+              {transcriptSource && (
+                <TranscriptViewer
+                  source={transcriptSource}
+                  masterName={master.name}
+                  onClose={() => setTranscriptSource(null)}
+                />
+              )}
+            </motion.div>
+          )}
+
           {tab === "media" && (
             <motion.div key="media" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }}>
+              {capabilities && (
+                <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+                  {([
+                    { key: "diarization", label: "Speaker Diarization" },
+                    { key: "voice_cloning", label: "Voice Cloning" },
+                    { key: "movement_analysis", label: "Movement Analysis" },
+                    { key: "tts", label: "Text-to-Speech" },
+                    { key: "rag", label: "RAG Chat" },
+                  ] as { key: keyof Capabilities; label: string }[]).map(({ key, label }) => {
+                    const on = capabilities[key];
+                    return (
+                      <span key={key} style={{
+                        display: "inline-flex", alignItems: "center", gap: 5,
+                        fontSize: 11, fontWeight: 500, padding: "3px 9px", borderRadius: 20,
+                        background: on ? "rgba(22,163,74,0.07)" : "var(--surface-2)",
+                        border: `1px solid ${on ? "rgba(22,163,74,0.2)" : "var(--border)"}`,
+                        color: on ? "var(--color-success, #16a34a)" : "var(--text-muted)",
+                      }}>
+                        <span style={{ width: 6, height: 6, borderRadius: "50%", background: on ? "#16a34a" : "var(--text-muted)", flexShrink: 0 }} />
+                        {label}
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
               <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: 20, alignItems: "start" }}>
                 <div style={{ borderRadius: 16, border: "1px solid var(--border)", background: "var(--surface)", padding: 22 }}>
                   <div style={{ marginBottom: 16 }}>
@@ -314,7 +456,7 @@ export default function MasterPage() {
         </AnimatePresence>
       </main>
 
-      <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+      <style>{`@keyframes spin { to { transform: rotate(360deg); } } @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }`}</style>
     </div>
   );
 }

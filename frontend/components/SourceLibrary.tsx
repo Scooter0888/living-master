@@ -1,6 +1,6 @@
 "use client";
-import { useEffect, useState } from "react";
-import { Trash2, ExternalLink, RefreshCw, CheckCircle2, XCircle, Clock, Loader2, FileText, Users, Film, RotateCcw } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { Trash2, ExternalLink, RefreshCw, CheckCircle2, XCircle, Clock, Loader2, FileText, Users, Film, RotateCcw, Upload } from "lucide-react";
 import { api, Source } from "@/lib/api";
 import { CONTENT_TYPE_ICONS, CONTENT_TYPE_LABELS, formatDuration, formatRelativeTime } from "@/lib/utils";
 import { TranscriptViewer } from "./TranscriptViewer";
@@ -54,6 +54,9 @@ export function SourceLibrary({ sources, masterId, masterName = "Master", onDele
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [reingestingId, setReingestingId] = useState<string | null>(null);
   const [retryingAll, setRetryingAll] = useState(false);
+  const [reuploadingId, setReuploadingId] = useState<string | null>(null);
+  const reuploadInputRef = useRef<HTMLInputElement>(null);
+  const reuploadTargetRef = useRef<Source | null>(null);
   const [viewingSource, setViewingSource] = useState<Source | null>(initialViewSource ?? null);
   const [speakerSource, setSpeakerSource] = useState<Source | null>(null);
   const [analysingId, setAnalysingId] = useState<string | null>(null);
@@ -85,6 +88,26 @@ export function SourceLibrary({ sources, masterId, masterName = "Master", onDele
     try { await api.ingest.retryAllFailed(masterId); setTimeout(onRefresh, 800); }
     catch (e) { console.error(e); }
     finally { setRetryingAll(false); }
+  };
+
+  const handleReupload = (source: Source) => {
+    reuploadTargetRef.current = source;
+    reuploadInputRef.current?.click();
+  };
+
+  const handleReuploadFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    const source = reuploadTargetRef.current;
+    if (!file || !source) return;
+    e.target.value = "";
+    setReuploadingId(source.id);
+    try {
+      // Delete the old failed entry, then upload the new file
+      await api.ingest.deleteSource(masterId, source.id);
+      await api.ingest.file(masterId, file);
+      setTimeout(onRefresh, 500);
+    } catch (err) { console.error(err); }
+    finally { setReuploadingId(null); reuploadTargetRef.current = null; }
   };
 
   const handleAnalyseMovements = async (source: Source) => {
@@ -165,9 +188,11 @@ export function SourceLibrary({ sources, masterId, masterName = "Master", onDele
               isLast={i === sources.length - 1}
               deleting={deletingId === source.id}
               reingesting={reingestingId === source.id}
+              reuploading={reuploadingId === source.id}
               analysing={analysingId === source.id}
               onDelete={() => handleDelete(source)}
               onReingest={source.url && (source.status === "completed" || source.status === "failed") ? () => handleReingest(source) : undefined}
+              onReupload={!source.url && source.status === "failed" ? () => handleReupload(source) : undefined}
               onViewTranscript={source.status === "completed" ? () => setViewingSource(source) : undefined}
               onIdentifySpeaker={source.status === "needs_speaker_id" ? () => setSpeakerSource(source) : undefined}
               onAnalyseMovements={
@@ -179,6 +204,15 @@ export function SourceLibrary({ sources, masterId, masterName = "Master", onDele
           ))}
         </div>
       </div>
+
+      {/* Hidden file input for re-uploading failed file sources */}
+      <input
+        ref={reuploadInputRef}
+        type="file"
+        accept=".mp3,.wav,.m4a,.mp4,.mkv,.mov,.vob,.iso,.pdf,.docx"
+        style={{ display: "none" }}
+        onChange={handleReuploadFile}
+      />
 
       <TranscriptViewer source={viewingSource} onClose={() => setViewingSource(null)} />
 
@@ -194,6 +228,7 @@ export function SourceLibrary({ sources, masterId, masterName = "Master", onDele
 
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes progress-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(400%); } }
         .src-row:hover { background: var(--surface-2) !important; }
         .src-row:hover .src-del { opacity: 1 !important; }
         .src-row:hover .src-view { opacity: 1 !important; }
@@ -202,14 +237,16 @@ export function SourceLibrary({ sources, masterId, masterName = "Master", onDele
   );
 }
 
-function SourceRow({ source, isLast, deleting, reingesting, analysing, onDelete, onReingest, onViewTranscript, onIdentifySpeaker, onAnalyseMovements }: {
+function SourceRow({ source, isLast, deleting, reingesting, reuploading, analysing, onDelete, onReingest, onReupload, onViewTranscript, onIdentifySpeaker, onAnalyseMovements }: {
   source: Source;
   isLast: boolean;
   deleting: boolean;
   reingesting?: boolean;
+  reuploading?: boolean;
   analysing?: boolean;
   onDelete: () => void;
   onReingest?: () => void;
+  onReupload?: () => void;
   onViewTranscript?: () => void;
   onIdentifySpeaker?: () => void;
   onAnalyseMovements?: () => void;
@@ -225,8 +262,8 @@ function SourceRow({ source, isLast, deleting, reingesting, analysing, onDelete,
 
   const note = source.status === "failed" && source.error_message
     ? humanizeError(source.error_message)
-    : source.status === "pending" ? "Queued for processing"
-    : source.status === "processing" ? "Extracting & indexing content…"
+    : source.status === "pending" ? "Queued…"
+    : source.status === "processing" ? (source.processing_stage || "Processing…")
     : source.status === "needs_speaker_id" ? `${source.speaker_count || "Multiple"} speakers detected — identify the master`
     : "";
 
@@ -266,6 +303,37 @@ function SourceRow({ source, isLast, deleting, reingesting, analysing, onDelete,
           <p style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2, paddingLeft: 19 }}>
             {CONTENT_TYPE_LABELS[source.content_type]}{meta.length > 0 ? " · " + meta.join(" · ") : ""}
           </p>
+        )}
+        {/* Progress bar — shown while processing or pending with a known pct */}
+        {(source.status === "processing" || source.status === "pending") && (
+          <div style={{ paddingLeft: 19, marginTop: 5 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <div style={{
+                flex: 1, height: 4, borderRadius: 99,
+                background: "var(--surface-2)",
+                overflow: "hidden",
+              }}>
+                <div style={{
+                  height: "100%",
+                  borderRadius: 99,
+                  background: "var(--accent)",
+                  width: source.progress_pct != null ? `${source.progress_pct}%` : "0%",
+                  transition: "width 0.6s ease",
+                  // Animate as indeterminate if pending with no pct
+                  ...(source.status === "pending" && source.progress_pct == null ? {
+                    width: "30%",
+                    animation: "progress-slide 1.4s ease-in-out infinite",
+                    background: "var(--border-hover)",
+                  } : {}),
+                }} />
+              </div>
+              {source.progress_pct != null && (
+                <span style={{ fontSize: 10, fontWeight: 600, color: "var(--accent)", flexShrink: 0, minWidth: 26, textAlign: "right" }}>
+                  {source.progress_pct}%
+                </span>
+              )}
+            </div>
+          </div>
         )}
       </div>
 
@@ -342,6 +410,22 @@ function SourceRow({ source, isLast, deleting, reingesting, analysing, onDelete,
           <span title="Movement analysis complete" style={{ padding: 5, display: "flex", color: "var(--color-purple)" }}>
             <Film size={12} />
           </span>
+        )}
+        {onReupload && (
+          <button
+            onClick={onReupload}
+            disabled={reuploading}
+            title="Upload file again to retry"
+            style={{
+              padding: 5, borderRadius: 6, border: "none",
+              cursor: reuploading ? "not-allowed" : "pointer", display: "flex",
+              background: "rgba(59,130,246,0.08)", color: "var(--color-info)", opacity: 1,
+            }}
+            onMouseOver={e => { (e.currentTarget.style.background = "rgba(59,130,246,0.15)"); }}
+            onMouseOut={e => { (e.currentTarget.style.background = "rgba(59,130,246,0.08)"); }}
+          >
+            {reuploading ? <Loader2 size={12} style={{ animation: "spin 1s linear infinite" }} /> : <Upload size={12} />}
+          </button>
         )}
         {onReingest && (
           <button

@@ -4,6 +4,7 @@ Finds all VOB files (excluding menu VOBs < 50 MB), transcribes them in order,
 and returns a single merged IngestedContent.
 """
 import os
+from typing import Callable, Awaitable, Optional
 from app.services.ingestion.base import IngestedContent
 
 
@@ -11,7 +12,8 @@ def _find_vob_files(path: str) -> list[str]:
     """Return content VOBs sorted by name, skipping tiny menu files."""
     video_ts = path
     # Accept /Volumes/DVD, /Volumes/DVD/VIDEO_TS, or bare VIDEO_TS path
-    for candidate in [path, os.path.join(path, "VIDEO_TS"), os.path.join(path, "video_ts")]:
+    # Check VIDEO_TS subdirectory first — root path always exists as a dir so must come last
+    for candidate in [os.path.join(path, "VIDEO_TS"), os.path.join(path, "video_ts"), path]:
         if os.path.isdir(candidate):
             video_ts = candidate
             break
@@ -27,7 +29,11 @@ def _find_vob_files(path: str) -> list[str]:
     return vobs
 
 
-async def ingest_dvd_folder(folder_path: str) -> IngestedContent:
+async def ingest_dvd_folder(
+    folder_path: str,
+    run_movement_analysis: bool = False,
+    on_progress: Optional[Callable[[int, int], Awaitable[None]]] = None,
+) -> IngestedContent:
     if not os.path.isdir(folder_path):
         raise ValueError(f"Not a directory: {folder_path}")
 
@@ -45,12 +51,13 @@ async def ingest_dvd_folder(folder_path: str) -> IngestedContent:
     all_transcript_segments: list = []
     all_movement_chunks: list = []
     title = os.path.basename(folder_path.rstrip("/"))
+    total = len(vobs)
 
-    for vob_path in vobs:
+    for idx, vob_path in enumerate(vobs):
         vob_name = os.path.basename(vob_path)
-        print(f"[DVD] Processing {vob_name} ({os.path.getsize(vob_path) // (1024*1024)} MB)")
+        print(f"[DVD] Processing {vob_name} ({os.path.getsize(vob_path) // (1024*1024)} MB) [{idx+1}/{total}]")
         try:
-            result = await ingest_video(vob_path, vob_name)
+            result = await ingest_video(vob_path, vob_name, run_movement_analysis=run_movement_analysis)
             if result.text.strip():
                 all_texts.append(result.text)
             all_segments.extend(result.segments)
@@ -59,6 +66,9 @@ async def ingest_dvd_folder(folder_path: str) -> IngestedContent:
         except Exception as e:
             print(f"[DVD] Skipping {vob_name}: {e}")
             continue
+
+        if on_progress:
+            await on_progress(idx + 1, total)
 
     if not all_texts:
         raise ValueError("Could not extract any text from the DVD VOB files")

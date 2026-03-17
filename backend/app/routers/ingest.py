@@ -3,6 +3,17 @@ import uuid
 import json
 import asyncio
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, UploadFile, File, Form
+
+# Global semaphore — limits concurrent ingestion jobs to 2.
+# Prevents MLX/Metal resource contention and thread-pool exhaustion when many
+# sources are queued at once (e.g. "Retry All Failed" with 40+ sources).
+_ingest_semaphore: asyncio.Semaphore | None = None
+
+def _get_semaphore() -> asyncio.Semaphore:
+    global _ingest_semaphore
+    if _ingest_semaphore is None:
+        _ingest_semaphore = asyncio.Semaphore(2)
+    return _ingest_semaphore
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
@@ -15,6 +26,31 @@ from app.services.embeddings import chunk_text, embed_texts
 from app.services.vector_store import add_documents, delete_source_chunks
 from app.config import get_settings
 from app.services.diarization import count_unique_speakers, get_speaker_samples
+
+def _user_friendly_error(err: str) -> str:
+    """Convert raw Python exception strings into readable user messages."""
+    low = err.lower()
+    if "'_type'" in err or "keyerror" in low:
+        return "File could not be parsed — try re-uploading or converting to a different format."
+    if "ffmpeg" in low:
+        return "Audio extraction failed — ensure the file is a valid video/audio format."
+    if "requested format is not available" in low:
+        return "This video has no downloadable audio format available on YouTube."
+    if "no transcripts available" in low or "transcript api failed" in low:
+        return "No captions or audio available for this video."
+    if "timeout" in low or "timed out" in low:
+        return "Processing timed out — the file may be too large or the service was busy."
+    if "401" in err or "unauthorized" in low:
+        return "Authentication error — check API keys in your .env file."
+    if "rate limit" in low or "429" in err:
+        return "Rate limited by external API — will retry automatically."
+    if "connection" in low or "network" in low:
+        return "Network error — check your internet connection."
+    # Return the raw error if it's already readable (doesn't look like a Python repr)
+    if err.startswith("'") and err.endswith("'"):
+        return f"Parse error: {err}. Try re-uploading the file."
+    return err
+
 
 _EMPTY_CONTENT_PHRASES = (
     "No text could be extracted",
@@ -37,8 +73,8 @@ class IngestURLRequest(BaseModel):
     url: str
 
 
-async def _process_source(source_id: str, master_id: str, db_session_factory, content=None, file_path: Optional[str] = None, original_filename: Optional[str] = None):
-    """Background task: extract text → chunk → embed → store."""
+async def _process_source_impl(source_id: str, master_id: str, db_session_factory, content=None, file_path: Optional[str] = None, original_filename: Optional[str] = None, run_movement_analysis: bool = False):
+    """Core ingestion logic: extract text → chunk → embed → store."""
     from app.database import AsyncSessionLocal
 
     async with AsyncSessionLocal() as db:
@@ -47,22 +83,56 @@ async def _process_source(source_id: str, master_id: str, db_session_factory, co
         if not source:
             return
 
-        try:
-            source.status = IngestionStatus.processing
+        _STAGE_PCT = {
+            "Starting…": 2,
+            "Transcribing audio…": 10,
+            "Downloading & transcribing…": 10,
+            "Extracting PDF text…": 20,
+            "Fetching page content…": 25,
+            "Processing file…": 10,
+            "Chunking text…": 80,
+            "Indexing…": 95,
+        }
+
+        async def _set_stage(stage: str, pct: int | None = None):
+            source.processing_stage = stage
+            source.progress_pct = pct if pct is not None else _STAGE_PCT.get(stage)
             await db.commit()
 
-            # Ingest content
+        try:
+            source.status = IngestionStatus.processing
+            # Only show "Starting…" if content not already pre-ingested (e.g. DVD pre-transcribed)
+            if not content:
+                source.processing_stage = "Starting…"
+                source.progress_pct = 2
+            await db.commit()
+
+            # Ingest content (download / transcribe / extract)
             if file_path and original_filename:
-                ingested = await ingest_file(file_path, original_filename)
+                content_type_hint = detect_content_type(original_filename)
+                if content_type_hint in ("video", "audio"):
+                    await _set_stage("Transcribing audio…")
+                elif content_type_hint == "youtube":
+                    await _set_stage("Downloading & transcribing…")
+                elif content_type_hint == "pdf":
+                    await _set_stage("Extracting PDF text…")
+                elif content_type_hint == "web":
+                    await _set_stage("Fetching page content…")
+                else:
+                    await _set_stage("Processing file…")
+                ingested = await ingest_file(file_path, original_filename, run_movement_analysis=run_movement_analysis)
             else:
                 ingested = content
 
             # Chunk
+            await _set_stage("Chunking text…")
             chunks = chunk_text(ingested.text)
             if not chunks:
                 raise ValueError("No text could be extracted from this source")
 
-            # Embed
+            # Embed — pct scales with chunk count (88–94%)
+            n = len(chunks)
+            await _set_stage(f"Embedding {n} chunks…", pct=88)
             embeddings = await embed_texts(chunks)
 
             # Build metadata for each chunk
@@ -79,6 +149,7 @@ async def _process_source(source_id: str, master_id: str, db_session_factory, co
             ]
 
             # Store in Chroma
+            await _set_stage("Indexing…")
             await add_documents(master_id, source_id, chunks, metadatas, embeddings)
 
             # Save transcript segments (timestamped) for audio sources
@@ -124,12 +195,17 @@ async def _process_source(source_id: str, master_id: str, db_session_factory, co
                 source.status = IngestionStatus.needs_speaker_id
             else:
                 source.status = IngestionStatus.completed
+            source.processing_stage = None
+            source.progress_pct = None
             source.chunk_count = len(chunks) + len(movement_chunks)
             source.word_count = len(ingested.text.split())
             source.title = ingested.title or source.title
             source.author = ingested.author
             source.thumbnail_url = ingested.thumbnail_url
             source.duration_seconds = ingested.duration_seconds
+            # Propagate the detected master speaker ID (Russian voice = Mikhail)
+            if ingested.speaker_label:
+                source.speaker_label = ingested.speaker_label
             await db.commit()
 
         except Exception as e:
@@ -139,12 +215,30 @@ async def _process_source(source_id: str, master_id: str, db_session_factory, co
                 await db.delete(source)
             else:
                 source.status = IngestionStatus.failed
-                source.error_message = err_str
+                source.processing_stage = None
+                source.progress_pct = None
+                source.error_message = _user_friendly_error(err_str)
             await db.commit()
         finally:
             # Delete uploaded file — movement analysis already ran during ingestion
             if file_path and os.path.exists(file_path):
                 os.unlink(file_path)
+
+
+async def _process_source(source_id: str, master_id: str, db_session_factory, content=None, file_path: Optional[str] = None, original_filename: Optional[str] = None, run_movement_analysis: bool = False):
+    """Semaphore-gated wrapper around _process_source_impl.
+    Limits concurrent ingestion to 2 to prevent MLX/Metal contention and thread exhaustion.
+    """
+    async with _get_semaphore():
+        await _process_source_impl(
+            source_id=source_id,
+            master_id=master_id,
+            db_session_factory=db_session_factory,
+            content=content,
+            file_path=file_path,
+            original_filename=original_filename,
+            run_movement_analysis=run_movement_analysis,
+        )
 
 
 @router.post("/url", status_code=202)
@@ -189,7 +283,7 @@ async def ingest_from_url(
                         src = r.scalar_one_or_none()
                         if src:
                             src.status = IngestionStatus.failed
-                            src.error_message = err_str
+                            src.error_message = _user_friendly_error(err_str)
                             await db2.commit()
 
             background_tasks.add_task(_retry_existing)
@@ -218,6 +312,17 @@ async def ingest_from_url(
     # Ingest content synchronously here to get metadata, then process in background
     async def _ingest_and_process():
         from app.database import AsyncSessionLocal
+
+        # Set stage to reflect the download/fetch step before _process_source takes over
+        async with AsyncSessionLocal() as db2:
+            result2 = await db2.execute(select(Source).where(Source.id == source.id))
+            src = result2.scalar_one_or_none()
+            if src:
+                src.status = IngestionStatus.processing
+                is_yt = content_type_str == "youtube"
+                src.processing_stage = "Downloading & transcribing…" if is_yt else "Fetching content…"
+                await db2.commit()
+
         try:
             ingested = await ingest_url(body.url)
             await _process_source(
@@ -236,7 +341,8 @@ async def ingest_from_url(
                         await db2.delete(src)
                     else:
                         src.status = IngestionStatus.failed
-                        src.error_message = err_str
+                        src.processing_stage = None
+                        src.error_message = _user_friendly_error(err_str)
                     await db2.commit()
 
     background_tasks.add_task(_ingest_and_process)
@@ -253,6 +359,7 @@ async def ingest_from_file(
     master_id: str,
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    analyse_movements: str = Form("0"),
     db: AsyncSession = Depends(get_db),
 ):
     result = await db.execute(select(Master).where(Master.id == master_id))
@@ -313,6 +420,7 @@ async def ingest_from_file(
         content=None,
         file_path=saved_path,
         original_filename=original_filename,
+        run_movement_analysis=analyse_movements.strip() in ("1", "true", "yes"),
     )
 
     return {
@@ -322,8 +430,62 @@ async def ingest_from_file(
     }
 
 
+@router.get("/scan-local")
+async def scan_local_sources():
+    """
+    Scan for locally available video sources: mounted DVDs, disc images, and
+    video files in common locations. Returns one-click-ingestable items.
+    """
+    found = []
+
+    # Mounted volumes (DVDs, disc images, external drives)
+    volumes_dir = "/Volumes"
+    if os.path.isdir(volumes_dir):
+        for vol_name in sorted(os.listdir(volumes_dir)):
+            vol_path = os.path.join(volumes_dir, vol_name)
+            if not os.path.isdir(vol_path):
+                continue
+            # Skip system volumes
+            if vol_name in ("Macintosh HD", "Preboot", "Recovery", "VM", "Update", "Data"):
+                continue
+            video_ts = os.path.join(vol_path, "VIDEO_TS")
+            if os.path.isdir(video_ts):
+                found.append({
+                    "label": vol_name,
+                    "path": vol_path,
+                    "type": "dvd",
+                    "detail": "Mounted DVD",
+                })
+
+    # Common video file locations
+    home = os.path.expanduser("~")
+    search_dirs = [
+        os.path.join(home, "Movies"),
+        os.path.join(home, "Desktop"),
+        os.path.join(home, "Downloads"),
+    ]
+    VIDEO_EXTS = {".mp4", ".mkv", ".mov", ".avi", ".m4v", ".vob", ".iso"}
+    for search_dir in search_dirs:
+        if not os.path.isdir(search_dir):
+            continue
+        for fname in sorted(os.listdir(search_dir)):
+            if os.path.splitext(fname)[1].lower() in VIDEO_EXTS:
+                full_path = os.path.join(search_dir, fname)
+                if os.path.isfile(full_path):
+                    size_mb = os.path.getsize(full_path) // (1024 * 1024)
+                    found.append({
+                        "label": fname,
+                        "path": full_path,
+                        "type": "file",
+                        "detail": f"{size_mb} MB · {os.path.basename(search_dir)}",
+                    })
+
+    return {"sources": found}
+
+
 class IngestLocalPathRequest(BaseModel):
     path: str
+    analyse_movements: bool = False
 
 
 @router.post("/local-path", status_code=202)
@@ -374,9 +536,31 @@ async def ingest_from_local_path(
         try:
             if is_dvd_folder:
                 from app.services.ingestion.dvd import ingest_dvd_folder
-                ingested = await ingest_dvd_folder(path)
+
+                # Set source to processing early so progress is visible during transcription
+                async with AsyncSessionLocal() as db2:
+                    r = await db2.execute(select(Source).where(Source.id == source.id))
+                    src = r.scalar_one_or_none()
+                    if src:
+                        src.status = IngestionStatus.processing
+                        src.processing_stage = "Starting transcription…"
+                        src.progress_pct = 2
+                        await db2.commit()
+
+                async def _dvd_progress(completed: int, total: int):
+                    pct = 10 + int(completed / total * 68)  # 10% → 78% across VOBs
+                    stage = f"Transcribing VOB {completed}/{total}…"
+                    async with AsyncSessionLocal() as db2:
+                        r = await db2.execute(select(Source).where(Source.id == source.id))
+                        src = r.scalar_one_or_none()
+                        if src:
+                            src.processing_stage = stage
+                            src.progress_pct = pct
+                            await db2.commit()
+
+                ingested = await ingest_dvd_folder(path, run_movement_analysis=body.analyse_movements, on_progress=_dvd_progress)
             else:
-                ingested = await ingest_file(path, display_title)
+                ingested = await ingest_file(path, display_title, run_movement_analysis=body.analyse_movements)
             await _process_source(
                 source_id=source.id,
                 master_id=master_id,
@@ -393,7 +577,7 @@ async def ingest_from_local_path(
                         await db2.delete(src)
                     else:
                         src.status = IngestionStatus.failed
-                        src.error_message = err_str
+                        src.error_message = _user_friendly_error(err_str)
                     await db2.commit()
 
     background_tasks.add_task(_ingest_local)
@@ -449,7 +633,7 @@ async def retry_all_failed(
                     src = r.scalar_one_or_none()
                     if src:
                         src.status = IngestionStatus.failed
-                        src.error_message = err_str
+                        src.error_message = _user_friendly_error(err_str)
                         await db2.commit()
             # Small delay between requests to avoid rate limiting
             await asyncio.sleep(1)
@@ -504,7 +688,7 @@ async def reingest_source(
                 src = result2.scalar_one_or_none()
                 if src:
                     src.status = IngestionStatus.failed
-                    src.error_message = err_str
+                    src.error_message = _user_friendly_error(err_str)
                     await db2.commit()
 
     background_tasks.add_task(_reingest)

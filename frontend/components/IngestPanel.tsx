@@ -28,15 +28,21 @@ export function IngestPanel({ masterId, onIngested }: IngestPanelProps) {
   // File tab
   const [dragging, setDragging] = useState(false);
   const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [analyseMovements, setAnalyseMovements] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const processingRef = useRef(false);
   const queueRef = useRef<QueueItem[]>([]);
+  const analyseMovementsRef = useRef(false);
 
   // Local path tab
   const [localPath, setLocalPath] = useState("");
   const [localLoading, setLocalLoading] = useState(false);
   const [localError, setLocalError] = useState("");
   const [localSuccess, setLocalSuccess] = useState("");
+  const [localAnalyseMovements, setLocalAnalyseMovements] = useState(false);
+  const [localSources, setLocalSources] = useState<{ label: string; path: string; type: string; detail: string }[]>([]);
+  const [localScanLoading, setLocalScanLoading] = useState(false);
+  const [ingestingPath, setIngestingPath] = useState<string | null>(null);
 
   const setQueueSynced = (updater: (prev: QueueItem[]) => QueueItem[]) => {
     setQueue((prev) => {
@@ -57,15 +63,27 @@ export function IngestPanel({ masterId, onIngested }: IngestPanelProps) {
     finally { setUrlLoading(false); }
   };
 
-  const handleIngestLocalPath = async () => {
-    if (!localPath.trim()) return;
-    setLocalLoading(true); setLocalError(""); setLocalSuccess("");
+  const handleIngestLocalPath = async (path?: string) => {
+    const target = (path || localPath).trim();
+    if (!target) { setLocalError("Please enter a path first"); return; }
+    if (path) setIngestingPath(path);
+    else setLocalLoading(true);
+    setLocalError(""); setLocalSuccess("");
     try {
-      await api.ingest.localPath(masterId, localPath.trim());
+      await api.ingest.localPath(masterId, target, localAnalyseMovements);
       setLocalSuccess("Queued — processing in background");
       setTimeout(() => { setLocalSuccess(""); onIngested(); }, 2500);
     } catch (e: any) { setLocalError(e.message || "Failed to ingest path"); }
-    finally { setLocalLoading(false); }
+    finally { setLocalLoading(false); setIngestingPath(null); }
+  };
+
+  const handleScanLocal = async () => {
+    setLocalScanLoading(true);
+    try {
+      const result = await api.ingest.scanLocal(masterId);
+      setLocalSources(result.sources || []);
+    } catch { setLocalSources([]); }
+    finally { setLocalScanLoading(false); }
   };
 
   const processQueue = useCallback(async () => {
@@ -83,7 +101,7 @@ export function IngestPanel({ masterId, onIngested }: IngestPanelProps) {
       try {
         const file = fileMapRef.current.get(pending.id);
         if (!file) throw new Error("File not found");
-        const result = await api.ingest.file(masterId, file);
+        const result = await api.ingest.file(masterId, file, analyseMovementsRef.current);
         if (result.detail) throw new Error(result.detail);
         setQueueSynced((prev) =>
           prev.map((q) => q.id === pending.id ? { ...q, status: "done" } : q)
@@ -223,6 +241,28 @@ export function IngestPanel({ masterId, onIngested }: IngestPanelProps) {
                   e.target.value = "";
                 }} />
 
+              {/* Movement analysis opt-in */}
+              <label style={{
+                display: "flex", alignItems: "flex-start", gap: 8, marginTop: 10,
+                cursor: "pointer", userSelect: "none",
+              }}>
+                <input
+                  type="checkbox"
+                  checked={analyseMovements}
+                  onChange={(e) => {
+                    setAnalyseMovements(e.target.checked);
+                    analyseMovementsRef.current = e.target.checked;
+                  }}
+                  style={{ marginTop: 2, flexShrink: 0, accentColor: "var(--accent)" }}
+                />
+                <span style={{ fontSize: 11.5, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+                  Analyse movements with Claude Vision
+                  <span style={{ display: "block", fontSize: 10.5, color: "var(--text-muted)", marginTop: 1 }}>
+                    Extracts keyframes + describes physical actions — costs ~$0.01/min of video. Skip for long recordings.
+                  </span>
+                </span>
+              </label>
+
               <AnimatePresence>
                 {queue.length > 0 && (
                   <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}
@@ -265,30 +305,77 @@ export function IngestPanel({ masterId, onIngested }: IngestPanelProps) {
 
           {tab === "local" && (
             <motion.div key="local" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }}>
-              <p style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4, lineHeight: 1.6 }}>
-                Paste a path to a local file, DVD folder, or mounted disc — no upload needed.
-              </p>
-              <p style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 10, lineHeight: 1.5, opacity: 0.7 }}>
-                DVD: <code style={{ fontSize: 10, background: "var(--surface-2)", padding: "1px 4px", borderRadius: 3 }}>/Volumes/DISC_NAME</code> or <code style={{ fontSize: 10, background: "var(--surface-2)", padding: "1px 4px", borderRadius: 3 }}>/Volumes/DISC_NAME/VIDEO_TS</code><br />
-                File: <code style={{ fontSize: 10, background: "var(--surface-2)", padding: "1px 4px", borderRadius: 3 }}>/Users/you/Movies/lecture.mp4</code>
-              </p>
+
+              {/* Movement analysis toggle */}
+              <label style={{ display: "flex", alignItems: "flex-start", gap: 8, marginBottom: 12, cursor: "pointer", userSelect: "none" }}>
+                <input type="checkbox" checked={localAnalyseMovements} onChange={(e) => setLocalAnalyseMovements(e.target.checked)}
+                  style={{ marginTop: 2, flexShrink: 0, accentColor: "var(--accent)" }} />
+                <span style={{ fontSize: 11.5, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+                  Analyse movements with Claude Vision
+                  <span style={{ display: "block", fontSize: 10.5, color: "var(--text-muted)", marginTop: 1 }}>~$0.01/min of video. Leave unchecked for long DVDs.</span>
+                </span>
+              </label>
+
+              {/* Scan button */}
+              <Button variant="outline" size="sm" loading={localScanLoading} onClick={handleScanLocal}
+                style={{ width: "100%", marginBottom: 10, justifyContent: "center" }}>
+                <FolderOpen size={13} /> Detect DVDs &amp; Video Files
+              </Button>
+
+              {/* Detected sources */}
+              <AnimatePresence>
+                {localSources.length > 0 && (
+                  <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }}
+                    style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 10 }}>
+                    {localSources.map((src) => (
+                      <button key={src.path} onClick={() => handleIngestLocalPath(src.path)}
+                        disabled={ingestingPath === src.path}
+                        style={{
+                          display: "flex", alignItems: "center", justifyContent: "space-between",
+                          gap: 8, padding: "8px 12px", borderRadius: 8, cursor: "pointer",
+                          background: "var(--surface-2)", border: "1px solid var(--border)",
+                          textAlign: "left", width: "100%", transition: "border-color 0.12s",
+                        }}
+                        onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--accent)")}
+                        onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--border)")}
+                      >
+                        <div style={{ overflow: "hidden" }}>
+                          <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                            {src.type === "dvd" ? "💿 " : "🎬 "}{src.label}
+                          </div>
+                          <div style={{ fontSize: 10.5, color: "var(--text-muted)", marginTop: 1 }}>{src.detail}</div>
+                        </div>
+                        <div style={{ flexShrink: 0, fontSize: 11, color: "var(--accent)", fontWeight: 600 }}>
+                          {ingestingPath === src.path ? <Loader2 size={13} style={{ animation: "spin 1s linear infinite" }} /> : "+ Add"}
+                        </div>
+                      </button>
+                    ))}
+                  </motion.div>
+                )}
+                {localSources.length === 0 && !localScanLoading && (
+                  <></>
+                )}
+              </AnimatePresence>
+
+              {/* Manual path fallback */}
               <div style={{ display: "flex", gap: 8 }}>
-                <Input
-                  placeholder="/Volumes/DISC_NAME or /path/to/file.mp4"
-                  value={localPath}
-                  onChange={(e) => { setLocalPath(e.target.value); setLocalError(""); }}
-                  onKeyDown={(e) => e.key === "Enter" && handleIngestLocalPath()}
-                  style={{ flex: 1, fontFamily: "monospace", fontSize: 11 }}
-                />
-                <Button variant="accent" size="md" loading={localLoading} onClick={handleIngestLocalPath} disabled={!localPath.trim()}>
+                <div style={{ flex: 1 }}>
+                  <Input placeholder="/Volumes/DISC_NAME or /path/to/file.mp4"
+                    value={localPath}
+                    onChange={(e) => { setLocalPath(e.target.value); setLocalError(""); }}
+                    onKeyDown={(e) => e.key === "Enter" && handleIngestLocalPath()}
+                    style={{ fontFamily: "monospace", fontSize: 11 }} />
+                </div>
+                <Button variant="accent" size="md" loading={localLoading} onClick={() => handleIngestLocalPath()}>
                   <Plus size={14} /> Add
                 </Button>
               </div>
+
               <AnimatePresence>
                 {(localError || localSuccess) && (
                   <motion.div initial={{ opacity: 0, y: -4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }}
                     style={{
-                      marginTop: 12, display: "flex", alignItems: "center", justifyContent: "space-between",
+                      marginTop: 10, display: "flex", alignItems: "center", justifyContent: "space-between",
                       gap: 8, padding: "9px 12px", borderRadius: 8, fontSize: 12,
                       background: localError ? "var(--color-error-bg)" : "var(--color-success-bg)",
                       border: `1px solid ${localError ? "var(--color-error-border)" : "var(--color-success-border)"}`,
@@ -297,7 +384,8 @@ export function IngestPanel({ masterId, onIngested }: IngestPanelProps) {
                     <span style={{ display: "flex", alignItems: "center", gap: 6 }}>
                       {localSuccess && <Check size={12} />}{localError || localSuccess}
                     </span>
-                    <button onClick={() => { setLocalError(""); setLocalSuccess(""); }} style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", opacity: 0.6 }}>
+                    <button onClick={() => { setLocalError(""); setLocalSuccess(""); }}
+                      style={{ background: "none", border: "none", cursor: "pointer", color: "inherit", opacity: 0.6 }}>
                       <X size={12} />
                     </button>
                   </motion.div>
