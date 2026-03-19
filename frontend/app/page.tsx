@@ -1,16 +1,24 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
 import { motion } from "framer-motion";
-import { Plus, Sparkles, Zap, Brain, Mic } from "lucide-react";
+import { Plus, Sparkles, Zap, Brain, Mic, LogOut } from "lucide-react";
 import { MasterCard } from "@/components/MasterCard";
 import { CreateMasterModal } from "@/components/CreateMasterModal";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { api, Master } from "@/lib/api";
+import { clearToken } from "@/lib/auth";
+import { useRouter } from "next/navigation";
 
 export default function HomePage() {
+  const router = useRouter();
   const [masters, setMasters] = useState<Master[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+
+  const handleLogout = () => {
+    clearToken();
+    router.replace("/login");
+  };
 
   const fetchMasters = useCallback(async () => {
     try {
@@ -51,6 +59,19 @@ export default function HomePage() {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <ThemeToggle />
+            <button
+              onClick={handleLogout}
+              title="Sign out"
+              style={{
+                width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center",
+                background: "transparent", border: "1px solid transparent", color: "var(--text-muted)", cursor: "pointer",
+                transition: "all 0.12s",
+              }}
+              onMouseOver={e => { e.currentTarget.style.color = "var(--text-secondary)"; e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.background = "var(--surface)"; }}
+              onMouseOut={e => { e.currentTarget.style.color = "var(--text-muted)"; e.currentTarget.style.borderColor = "transparent"; e.currentTarget.style.background = "transparent"; }}
+            >
+              <LogOut size={13} />
+            </button>
             {masters.length > 0 && (
             <button
               onClick={() => setShowCreate(true)}

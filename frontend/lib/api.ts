@@ -1,10 +1,16 @@
+import { getStoredToken } from "./auth";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-const ACCESS_TOKEN = process.env.NEXT_PUBLIC_ACCESS_TOKEN || "";
+
+function getToken(): string {
+  return getStoredToken();
+}
 
 function headers(extra: Record<string, string> = {}): HeadersInit {
+  const token = getToken();
   return {
     "Content-Type": "application/json",
-    ...(ACCESS_TOKEN ? { "X-Access-Token": ACCESS_TOKEN } : {}),
+    ...(token ? { "X-Access-Token": token } : {}),
     ...extra,
   };
 }
@@ -167,7 +173,7 @@ export const api = {
       form.append("file", file);
       return fetch(`${API_BASE}/masters/${id}/profile-photo`, {
         method: "POST",
-        headers: ACCESS_TOKEN ? { "X-Access-Token": ACCESS_TOKEN } : {},
+        headers: getToken() ? { "X-Access-Token": getToken() } : {},
         body: form,
       }).then((r) => r.json() as Promise<Master>);
     },
@@ -187,7 +193,7 @@ export const api = {
       form.append("analyse_movements", analyseMovements ? "1" : "0");
       return fetch(`${API_BASE}/masters/${masterId}/ingest/file`, {
         method: "POST",
-        headers: ACCESS_TOKEN ? { "X-Access-Token": ACCESS_TOKEN } : {},
+        headers: getToken() ? { "X-Access-Token": getToken() } : {},
         body: form,
       }).then((r) => r.json());
     },
@@ -232,7 +238,7 @@ export const api = {
       form.append("file", file);
       return fetch(`${API_BASE}/masters/${masterId}/media/photos`, {
         method: "POST",
-        headers: ACCESS_TOKEN ? { "X-Access-Token": ACCESS_TOKEN } : {},
+        headers: getToken() ? { "X-Access-Token": getToken() } : {},
         body: form,
       }).then((r) => r.json() as Promise<Photo>);
     },
@@ -326,7 +332,7 @@ export const api = {
       }),
     streamTopics: async function* (masterId: string): AsyncGenerator<string> {
       const res = await fetch(`${API_BASE}/masters/${masterId}/export/topics/stream`, {
-        headers: ACCESS_TOKEN ? { "X-Access-Token": ACCESS_TOKEN } : {},
+        headers: getToken() ? { "X-Access-Token": getToken() } : {},
       });
       if (!res.ok || !res.body) throw new Error("Stream request failed");
       const reader = res.body.getReader();
@@ -353,7 +359,7 @@ export const api = {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...(ACCESS_TOKEN ? { "X-Access-Token": ACCESS_TOKEN } : {}),
+          ...(getToken() ? { "X-Access-Token": getToken() } : {}),
         },
         body: JSON.stringify({ topic: topic || null }),
       });
@@ -390,11 +396,11 @@ export const api = {
         estimated_zip_mb: number;
       }>("/backup/status"),
 
-    exportUrl: () => `${API_BASE}/backup/export${ACCESS_TOKEN ? `?token=${encodeURIComponent(ACCESS_TOKEN)}` : ""}`,
+    exportUrl: () => `${API_BASE}/backup/export`,
 
     exportDownload: async (): Promise<void> => {
       const res = await fetch(`${API_BASE}/backup/export`, {
-        headers: ACCESS_TOKEN ? { "X-Access-Token": ACCESS_TOKEN } : {},
+        headers: getToken() ? { "X-Access-Token": getToken() } : {},
       });
       if (!res.ok) throw new Error(`Export failed: ${res.statusText}`);
       const blob = await res.blob();
@@ -411,7 +417,7 @@ export const api = {
       form.append("file", file);
       const res = await fetch(`${API_BASE}/backup/import`, {
         method: "POST",
-        headers: ACCESS_TOKEN ? { "X-Access-Token": ACCESS_TOKEN } : {},
+        headers: getToken() ? { "X-Access-Token": getToken() } : {},
         body: form,
       });
       if (!res.ok) {

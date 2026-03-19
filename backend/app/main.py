@@ -187,6 +187,13 @@ async def health():
     return {"status": "ok", "service": "living-master-api", "version": "1.0.0"}
 
 
+@app.get("/auth/verify")
+async def verify_auth():
+    """Token validation endpoint — returns 200 if the access token is valid, 401 otherwise.
+    Auth is enforced by the logging_and_auth middleware above."""
+    return {"ok": True}
+
+
 @app.get("/capabilities")
 async def capabilities():
     """Return which AI features are configured and available."""
