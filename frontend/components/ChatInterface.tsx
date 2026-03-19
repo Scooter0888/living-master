@@ -47,6 +47,9 @@ export function ChatInterface({ master }: { master: Master }) {
   const voiceAvailable = !!master.voice_id || master.voice_status === "ready";
   const speechSupported = typeof window !== "undefined" && !!(window.SpeechRecognition || window.webkitSpeechRecognition);
 
+  // Clear chat whenever the master changes or the component remounts after navigation
+  useEffect(() => { setMessages([]); setInput(""); }, [master.id]);
+
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages]);
 
   // Set up speech recognition
