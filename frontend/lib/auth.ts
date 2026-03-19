@@ -2,8 +2,8 @@ const TOKEN_KEY = "lm_access_token";
 const ROLE_KEY  = "lm_role";
 
 export function getStoredToken(): string {
-  if (typeof window === "undefined") return process.env.NEXT_PUBLIC_ACCESS_TOKEN || "";
-  return localStorage.getItem(TOKEN_KEY) || process.env.NEXT_PUBLIC_ACCESS_TOKEN || "";
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem(TOKEN_KEY) || "";
 }
 
 export function saveToken(token: string): void {
