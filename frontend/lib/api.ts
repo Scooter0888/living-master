@@ -280,10 +280,15 @@ export const api = {
       if (!res.ok) throw new Error("TTS synthesis failed");
       return res.blob();
     },
-    identifySpeaker: (masterId: string, sourceId: string, masterSpeaker: string) =>
+    identifySpeaker: (
+      masterId: string,
+      sourceId: string,
+      masterSpeaker: string,
+      otherRoles: Record<string, "interviewer" | "translator" | "skip"> = {}
+    ) =>
       request<{ status: string }>(`/masters/${masterId}/voice/identify-speaker`, {
         method: "POST",
-        body: JSON.stringify({ source_id: sourceId, master_speaker: masterSpeaker }),
+        body: JSON.stringify({ source_id: sourceId, master_speaker: masterSpeaker, other_roles: otherRoles }),
       }),
     autoIdentifyAll: (masterId: string) =>
       request<{

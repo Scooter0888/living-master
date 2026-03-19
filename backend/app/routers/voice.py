@@ -8,7 +8,7 @@ from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 from app.database import get_db
 from app.models import Master, Source, IngestionStatus
@@ -47,6 +47,9 @@ class PreviewRequest(BaseModel):
 class IdentifySpeakerRequest(BaseModel):
     source_id: str
     master_speaker: str
+    # Role for each non-master speaker: "interviewer" | "translator" | "skip"
+    # Defaults to "interviewer" for any unlabelled speaker.
+    other_roles: Dict[str, str] = {}
 
 
 class AutoIdentifyRequest(BaseModel):
@@ -264,6 +267,147 @@ async def synthesize_speech_endpoint(
 
 
 # ---------------------------------------------------------------------------
+# Shared reindex helper — builds Q&A context chunks from segment data
+# ---------------------------------------------------------------------------
+
+def _build_contextual_chunks(
+    segments: list[dict],
+    master_speaker: str,
+    other_roles: dict[str, str],
+) -> list[str]:
+    """
+    Build context-aware text chunks from diarized transcript segments.
+
+    Roles for non-master speakers:
+      "interviewer" — questions are prepended to Mikhail's following answer
+                      as "Q: ...\nA: ..." so both are searchable together.
+      "translator"  — their speech IS the master's content in another
+                      language; treated as master speech and indexed directly.
+      "skip"        — ignored entirely.
+
+    Unrecognised speakers default to "interviewer".
+    """
+    # ── 1. Group consecutive same-speaker segments into turns ────────────────
+    turns: list[dict] = []
+    for seg in segments:
+        spk = seg.get("speaker", "UNKNOWN")
+        text = (seg.get("text") or "").strip()
+        if not text:
+            continue
+        if turns and turns[-1]["speaker"] == spk:
+            turns[-1]["text"] += " " + text
+        else:
+            turns.append({"speaker": spk, "text": text})
+
+    # ── 2. Walk turns and build meaningful chunks ─────────────────────────────
+    result: list[str] = []
+    for i, turn in enumerate(turns):
+        spk = turn["speaker"]
+
+        if spk == master_speaker:
+            # Look back for a preceding interviewer question
+            prefix = ""
+            if i > 0:
+                prev = turns[i - 1]
+                prev_role = other_roles.get(prev["speaker"], "interviewer")
+                if prev["speaker"] != master_speaker and prev_role == "interviewer":
+                    prefix = f"Q: {prev['text']}\n"
+            result.append(f"{prefix}A: {turn['text']}" if prefix else turn["text"])
+
+        else:
+            role = other_roles.get(spk, "interviewer")
+            if role == "translator":
+                # Translator's words are the master's content in another language
+                result.append(turn["text"])
+            # "interviewer" and "skip" are only included as context above
+
+    return result
+
+
+async def _reindex_with_context(
+    source_id: str,
+    master_id: str,
+    master_speaker: str,
+    other_roles: dict[str, str],
+) -> None:
+    """
+    Reindex a diarized source using context-aware Q&A chunks.
+    Falls back to plain master-only text if no segment data is available.
+    """
+    import json as _json
+    from app.database import AsyncSessionLocal
+    from app.services.vector_store import delete_source_chunks, add_documents, get_source_chunks
+    from app.services.embeddings import chunk_text, embed_texts
+
+    async with AsyncSessionLocal() as db2:
+        result2 = await db2.execute(select(Source).where(Source.id == source_id))
+        src = result2.scalar_one_or_none()
+        if not src:
+            return
+        try:
+            # ── Try segment-level Q&A chunking first ──────────────────────────
+            raw_segments = None
+            if src.transcript_segments_json:
+                try:
+                    raw_segments = _json.loads(src.transcript_segments_json)
+                except Exception:
+                    pass
+
+            if raw_segments:
+                contextual = _build_contextual_chunks(raw_segments, master_speaker, other_roles)
+                # Re-chunk each contextual block to stay within token limits
+                chunks: list[str] = []
+                for block in contextual:
+                    chunks.extend(chunk_text(block) or [block])
+            else:
+                # Fallback: filter existing ChromaDB chunks to master speaker
+                existing = await get_source_chunks(master_id, source_id)
+                if not existing:
+                    src.status = IngestionStatus.completed
+                    await db2.commit()
+                    return
+                master_chunks = [
+                    c for c in existing
+                    if c.get("speaker") == master_speaker or not c.get("speaker")
+                ] or existing
+                chunks = chunk_text(" ".join(c["text"] for c in master_chunks))
+
+            if not chunks:
+                src.status = IngestionStatus.completed
+                await db2.commit()
+                return
+
+            embeddings = await embed_texts(chunks)
+            metadatas = [
+                {
+                    "source_id": source_id,
+                    "master_id": master_id,
+                    "title": src.title or "Untitled",
+                    "url": src.url or "",
+                    "content_type": (
+                        src.content_type.value if hasattr(src.content_type, "value")
+                        else str(src.content_type)
+                    ),
+                    "chunk_index": i,
+                    "speaker": master_speaker,
+                }
+                for i in range(len(chunks))
+            ]
+            await delete_source_chunks(master_id, source_id)
+            await add_documents(master_id, source_id, chunks, metadatas, embeddings)
+            src.status = IngestionStatus.completed
+            src.chunk_count = len(chunks)
+            print(
+                f"[Reindex] {source_id}: {len(chunks)} chunks "
+                f"({'Q&A context' if raw_segments else 'fallback plain'})"
+            )
+        except Exception as e:
+            print(f"[Reindex] Failed for {source_id}: {e}")
+            src.status = IngestionStatus.completed
+        await db2.commit()
+
+
+# ---------------------------------------------------------------------------
 # Identify speaker (diarization post-processing)
 # ---------------------------------------------------------------------------
 
@@ -286,60 +430,15 @@ async def identify_speaker(
     await db.commit()
 
     async def _reindex():
-        from app.database import AsyncSessionLocal
-        from app.services.vector_store import delete_source_chunks, add_documents, get_source_chunks
-        from app.services.embeddings import chunk_text, embed_texts
-
-        async with AsyncSessionLocal() as db2:
-            result2 = await db2.execute(select(Source).where(Source.id == body.source_id))
-            src = result2.scalar_one_or_none()
-            if not src:
-                return
-            try:
-                existing = await get_source_chunks(master_id, body.source_id)
-                if not existing:
-                    src.status = IngestionStatus.completed
-                    await db2.commit()
-                    return
-
-                master_chunks = [
-                    c for c in existing
-                    if c.get("speaker") == body.master_speaker or not c.get("speaker")
-                ]
-                if not master_chunks:
-                    master_chunks = existing
-
-                text = " ".join(c["text"] for c in master_chunks)
-                chunks = chunk_text(text)
-                if not chunks:
-                    src.status = IngestionStatus.completed
-                    await db2.commit()
-                    return
-
-                embeddings = await embed_texts(chunks)
-                metadatas = [
-                    {
-                        "source_id": body.source_id,
-                        "master_id": master_id,
-                        "title": src.title or "Untitled",
-                        "url": src.url or "",
-                        "content_type": src.content_type.value if hasattr(src.content_type, "value") else str(src.content_type),
-                        "chunk_index": i,
-                        "speaker": body.master_speaker,
-                    }
-                    for i in range(len(chunks))
-                ]
-                await delete_source_chunks(master_id, body.source_id)
-                await add_documents(master_id, body.source_id, chunks, metadatas, embeddings)
-                src.status = IngestionStatus.completed
-                src.chunk_count = len(chunks)
-            except Exception as e:
-                print(f"[IdentifySpeaker] Reindex failed: {e}")
-                src.status = IngestionStatus.completed
-            await db2.commit()
+        await _reindex_with_context(
+            source_id=body.source_id,
+            master_id=master_id,
+            master_speaker=body.master_speaker,
+            other_roles=body.other_roles,
+        )
 
     background_tasks.add_task(_reindex)
-    return {"status": "processing", "message": "Re-indexing with master speaker only"}
+    return {"status": "processing", "message": "Re-indexing with Q&A context chunks"}
 
 
 # ---------------------------------------------------------------------------
@@ -477,11 +576,15 @@ async def auto_identify_all_speakers(
     # ── 5. Fire off reindex tasks for confident matches ───────────────────────
     confident_matches = [q for q in queued if q["confident"]]
 
-    async def _reindex_source(source_id: str, master_speaker: str):
+    async def _reindex_source(source_id: str, master_speaker: str, speaker_scores: dict):
         from app.database import AsyncSessionLocal
-        from app.services.vector_store import delete_source_chunks, add_documents, get_source_chunks
-        from app.services.embeddings import chunk_text, embed_texts as _embed
-
+        # Mark the source as the master speaker then reindex with Q&A context.
+        # All non-master speakers default to "interviewer" (questions kept as context).
+        other_roles = {
+            spk: "interviewer"
+            for spk in speaker_scores
+            if spk != master_speaker
+        }
         async with AsyncSessionLocal() as db2:
             r = await db2.execute(select(Source).where(Source.id == source_id))
             src = r.scalar_one_or_none()
@@ -490,45 +593,12 @@ async def auto_identify_all_speakers(
             src.speaker_label = master_speaker
             src.status = IngestionStatus.processing
             await db2.commit()
-
-            try:
-                existing = await get_source_chunks(master_id, source_id)
-                master_chunks = [
-                    c for c in existing
-                    if c.get("speaker") == master_speaker or not c.get("speaker")
-                ] or existing
-
-                text = " ".join(c["text"] for c in master_chunks)
-                chunks = chunk_text(text)
-                if not chunks:
-                    src.status = IngestionStatus.completed
-                    await db2.commit()
-                    return
-
-                embeddings = await _embed(chunks)
-                metadatas = [
-                    {
-                        "source_id": source_id,
-                        "master_id": master_id,
-                        "title": src.title or "Untitled",
-                        "url": src.url or "",
-                        "content_type": src.content_type.value if hasattr(src.content_type, "value") else str(src.content_type),
-                        "chunk_index": i,
-                        "speaker": master_speaker,
-                    }
-                    for i in range(len(chunks))
-                ]
-                await delete_source_chunks(master_id, source_id)
-                await add_documents(master_id, source_id, chunks, metadatas, embeddings)
-                src.status = IngestionStatus.completed
-                src.chunk_count = len(chunks)
-            except Exception as e:
-                print(f"[AutoIdentify] Reindex failed for {source_id}: {e}")
-                src.status = IngestionStatus.completed
-            await db2.commit()
+        await _reindex_with_context(source_id, master_id, master_speaker, other_roles)
 
     for match in confident_matches:
-        background_tasks.add_task(_reindex_source, match["source_id"], match["matched_speaker"])
+        background_tasks.add_task(
+            _reindex_source, match["source_id"], match["matched_speaker"], match["speaker_scores"]
+        )
 
     low_confidence = [q for q in queued if not q["confident"]]
 
