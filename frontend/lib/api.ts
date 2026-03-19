@@ -290,6 +290,8 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ source_id: sourceId, master_speaker: masterSpeaker, other_roles: otherRoles }),
       }),
+    reindexAll: (masterId: string) =>
+      request<{ queued: number; message: string }>(`/masters/${masterId}/voice/reindex-all`, { method: "POST" }),
     autoIdentifyAll: (masterId: string) =>
       request<{
         queued: number;

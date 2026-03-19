@@ -63,6 +63,8 @@ export function SourceLibrary({ sources, masterId, masterName = "Master", onDele
   const [autoIdentifying, setAutoIdentifying] = useState(false);
   const [autoIdentifyResult, setAutoIdentifyResult] = useState<{ queued: number; low_confidence: number; message: string } | null>(null);
   const [autoIdentifyError, setAutoIdentifyError] = useState<string | null>(null);
+  const [reindexingAll, setReindexingAll] = useState(false);
+  const [reindexAllResult, setReindexAllResult] = useState<string | null>(null);
   const hasProcessing = sources.some((s) => s.status === "processing" || s.status === "pending" || s.status === "needs_speaker_id");
 
   useEffect(() => {
@@ -111,6 +113,21 @@ export function SourceLibrary({ sources, masterId, masterName = "Master", onDele
       setTimeout(onRefresh, 500);
     } catch (err) { console.error(err); }
     finally { setReuploadingId(null); reuploadTargetRef.current = null; }
+  };
+
+  const handleReindexAll = async () => {
+    if (!confirm("Re-index all identified sources with Q&A context chunking? This will replace existing chunks but keeps all your data.")) return;
+    setReindexingAll(true);
+    setReindexAllResult(null);
+    try {
+      const res = await api.voice.reindexAll(masterId);
+      setReindexAllResult(res.message);
+      setTimeout(onRefresh, 1500);
+    } catch (e: any) {
+      setReindexAllResult(`Error: ${e.message}`);
+    } finally {
+      setReindexingAll(false);
+    }
   };
 
   const handleAutoIdentify = async () => {
@@ -227,6 +244,54 @@ export function SourceLibrary({ sources, masterId, masterName = "Master", onDele
               >
                 <Users size={12} style={{ animation: autoIdentifying ? "spin 1s linear infinite" : "none" }} />
                 {autoIdentifying ? "Identifying…" : `Auto-identify ${masterName}`}
+              </button>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Reindex-all banner — shown when there are already-identified diarized sources */}
+      {(() => {
+        const identified = sources.filter(s => s.has_diarization && s.speaker_label && s.status === "completed");
+        if (identified.length === 0 && !reindexAllResult) return null;
+        return (
+          <div style={{
+            marginBottom: 14, padding: "12px 14px", borderRadius: 10,
+            background: reindexAllResult && !reindexAllResult.startsWith("Error")
+              ? "rgba(22,163,74,0.06)" : "rgba(245,158,11,0.06)",
+            border: `1px solid ${reindexAllResult && !reindexAllResult.startsWith("Error") ? "rgba(22,163,74,0.2)" : "rgba(245,158,11,0.2)"}`,
+            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap",
+          }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {reindexAllResult ? (
+                <p style={{ fontSize: 12.5, margin: 0, fontWeight: 500, color: reindexAllResult.startsWith("Error") ? "var(--color-error)" : "var(--color-success, #16a34a)" }}>
+                  {reindexAllResult}
+                </p>
+              ) : (
+                <>
+                  <p style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 2px" }}>
+                    {identified.length} identified source{identified.length !== 1 ? "s" : ""} — upgrade to Q&A indexing
+                  </p>
+                  <p style={{ fontSize: 11.5, color: "var(--text-muted)", margin: 0 }}>
+                    Re-index with interviewer questions kept as context. No re-ingestion needed.
+                  </p>
+                </>
+              )}
+            </div>
+            {!reindexAllResult && (
+              <button
+                onClick={handleReindexAll}
+                disabled={reindexingAll}
+                style={{
+                  display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
+                  padding: "7px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600,
+                  background: "rgba(245,158,11,0.12)", border: "1px solid rgba(245,158,11,0.3)",
+                  color: "#d97706", cursor: reindexingAll ? "not-allowed" : "pointer",
+                  opacity: reindexingAll ? 0.6 : 1, transition: "opacity 0.15s", whiteSpace: "nowrap",
+                }}
+              >
+                <RotateCcw size={12} style={{ animation: reindexingAll ? "spin 1s linear infinite" : "none" }} />
+                {reindexingAll ? "Re-indexing…" : "Re-index all"}
               </button>
             )}
           </div>

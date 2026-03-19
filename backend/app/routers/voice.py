@@ -611,3 +611,75 @@ async def auto_identify_all_speakers(
         ),
         "results": queued,
     }
+
+
+# ---------------------------------------------------------------------------
+# Reindex ALL already-identified sources with new Q&A context chunking
+# ---------------------------------------------------------------------------
+
+@router.post("/reindex-all")
+async def reindex_all_identified(
+    master_id: str,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Re-index every source that already has a speaker_label (master speaker identified)
+    using the new Q&A context chunking — no re-ingestion required.
+
+    All non-master speakers default to 'interviewer' (questions kept as context).
+    Safe to run multiple times — each run replaces the old chunks.
+    """
+    result = await db.execute(select(Master).where(Master.id == master_id))
+    master = result.scalar_one_or_none()
+    if not master:
+        raise HTTPException(status_code=404, detail="Master not found")
+
+    # All sources with a confirmed speaker label
+    src_result = await db.execute(
+        select(Source).where(
+            Source.master_id == master_id,
+            Source.speaker_label.isnot(None),
+            Source.status == IngestionStatus.completed,
+        )
+    )
+    sources = src_result.scalars().all()
+
+    if not sources:
+        return {
+            "queued": 0,
+            "message": "No identified sources found. Identify the master speaker in at least one source first.",
+        }
+
+    # Mark all as processing so the UI shows progress
+    for src in sources:
+        src.status = IngestionStatus.processing
+    await db.commit()
+
+    async def _reindex_all():
+        import json as _json
+        for src in sources:
+            # Build other_roles: any speaker in the samples that isn't the master → interviewer
+            other_roles: dict[str, str] = {}
+            if src.speaker_samples_json:
+                try:
+                    samples = _json.loads(src.speaker_samples_json)
+                    for spk in samples:
+                        if spk != src.speaker_label:
+                            other_roles[spk] = "interviewer"
+                except Exception:
+                    pass
+            await _reindex_with_context(
+                source_id=src.id,
+                master_id=master_id,
+                master_speaker=src.speaker_label,
+                other_roles=other_roles,
+            )
+
+    background_tasks.add_task(_reindex_all)
+
+    return {
+        "queued": len(sources),
+        "message": f"Re-indexing {len(sources)} source(s) with Q&A context. This runs in the background — sources will show as 'processing' until done.",
+        "sources": [{"id": s.id, "title": s.title or s.url} for s in sources],
+    }
