@@ -15,18 +15,19 @@ import { PhotoGallery } from "@/components/PhotoGallery";
 import { VoicePanel } from "@/components/VoicePanel";
 import { TranscriptViewer } from "@/components/TranscriptViewer";
 import BackupPanel from "@/components/BackupPanel";
+import { InfoTip } from "@/components/InfoTip";
 import { api, Master, Source, Capabilities } from "@/lib/api";
 
 type Tab = "chat" | "sources" | "discover" | "knowledge" | "media" | "transcripts" | "backup";
 
-const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
-  { id: "chat",        label: "Chat",        icon: <MessageSquare size={13} /> },
-  { id: "sources",     label: "Sources",     icon: <Database size={13} /> },
-  { id: "discover",    label: "Discover",    icon: <Search size={13} /> },
-  { id: "knowledge",   label: "Knowledge",   icon: <BookOpen size={13} /> },
-  { id: "media",       label: "Media",       icon: <Image size={13} /> },
-  { id: "transcripts", label: "Transcripts", icon: <ScrollText size={13} /> },
-  { id: "backup",      label: "Backup",      icon: <HardDrive size={13} /> },
+const TABS: { id: Tab; label: string; icon: React.ReactNode; tip: string }[] = [
+  { id: "chat",        label: "Chat",        icon: <MessageSquare size={13} />, tip: "Ask anything about this person. Answers come directly from their actual words across all indexed sources." },
+  { id: "sources",     label: "Sources",     icon: <Database size={13} />,      tip: "Add content to the knowledge base. Paste a YouTube URL, article link, or upload an audio/video/PDF file." },
+  { id: "discover",    label: "Discover",    icon: <Search size={13} />,        tip: "Search the web for all publicly available interviews, talks, and articles on this person. Select what to add in bulk." },
+  { id: "knowledge",   label: "Knowledge",   icon: <BookOpen size={13} />,      tip: "Generate an AI-written book from all indexed content, or explore themes. Export as a print-ready PDF." },
+  { id: "media",       label: "Media",       icon: <Image size={13} />,         tip: "Upload photos for the PDF book. Set up a voice — clone from audio sources or pick a preset text-to-speech voice." },
+  { id: "transcripts", label: "Transcripts", icon: <ScrollText size={13} />,    tip: "View full transcripts for each source. Identify which speaker is the master so only their words are indexed." },
+  { id: "backup",      label: "Backup",      icon: <HardDrive size={13} />,     tip: "Export all data as a zip (database + embeddings + media) and import it on another server. Use this to migrate between local and Railway." },
 ];
 
 export default function MasterPage() {
@@ -264,6 +265,9 @@ export default function MasterPage() {
                 {t.id === "sources" && master.source_count > 0
                   ? `Sources · ${master.source_count}`
                   : t.label}
+                <span onClick={e => e.stopPropagation()}>
+                  <InfoTip text={t.tip} position="bottom" width={240} />
+                </span>
               </button>
             ))}
           </div>

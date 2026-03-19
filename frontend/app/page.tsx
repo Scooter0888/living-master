@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState, useCallback } from "react";
 import { motion } from "framer-motion";
-import { Plus, Sparkles, Zap, Brain, Mic, LogOut } from "lucide-react";
+import { Plus, Sparkles, Zap, Brain, Mic, LogOut, HelpCircle, X } from "lucide-react";
 import { MasterCard } from "@/components/MasterCard";
 import { CreateMasterModal } from "@/components/CreateMasterModal";
 import { ThemeToggle } from "@/components/ThemeToggle";
@@ -14,6 +14,7 @@ export default function HomePage() {
   const [masters, setMasters] = useState<Master[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
 
   const handleLogout = () => {
     clearToken();
@@ -59,6 +60,19 @@ export default function HomePage() {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
             <ThemeToggle />
+            <button
+              onClick={() => setShowHelp(true)}
+              title="Getting started guide"
+              style={{
+                width: 30, height: 30, borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center",
+                background: "transparent", border: "1px solid transparent", color: "var(--text-muted)", cursor: "pointer",
+                transition: "all 0.12s",
+              }}
+              onMouseOver={e => { e.currentTarget.style.color = "var(--accent)"; e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.background = "var(--surface)"; }}
+              onMouseOut={e => { e.currentTarget.style.color = "var(--text-muted)"; e.currentTarget.style.borderColor = "transparent"; e.currentTarget.style.background = "transparent"; }}
+            >
+              <HelpCircle size={13} />
+            </button>
             <button
               onClick={handleLogout}
               title="Sign out"
@@ -249,6 +263,69 @@ export default function HomePage() {
       </main>
 
       <CreateMasterModal open={showCreate} onClose={() => setShowCreate(false)} onCreated={fetchMasters} />
+
+      {/* Getting Started Guide */}
+      {showHelp && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.5)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}
+          onClick={e => { if (e.target === e.currentTarget) setShowHelp(false); }}>
+          <div style={{ background: "var(--surface)", borderRadius: 18, padding: 28, maxWidth: 560, width: "100%", maxHeight: "85vh", overflowY: "auto", border: "1px solid var(--border)", boxShadow: "0 20px 60px rgba(0,0,0,0.2)" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 20 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <HelpCircle size={18} style={{ color: "var(--accent)" }} />
+                <h2 style={{ fontSize: 17, fontWeight: 800, color: "var(--text-primary)", margin: 0, letterSpacing: "-0.02em" }}>Getting Started</h2>
+              </div>
+              <button onClick={() => setShowHelp(false)} style={{ background: "none", border: "none", cursor: "pointer", color: "var(--text-muted)", display: "flex", padding: 4 }}><X size={16} /></button>
+            </div>
+
+            {[
+              {
+                step: "1", title: "Create a Master",
+                body: "Click New Master and enter a name — a public figure, thinker, athlete, or anyone whose knowledge you want to preserve. This creates their profile.",
+              },
+              {
+                step: "2", title: "Add Sources",
+                body: "Go to the Sources tab. Paste any YouTube URL, article link, podcast, Wikipedia page, or upload an audio/video/PDF file. Each source is transcribed and indexed automatically.",
+              },
+              {
+                step: "3", title: "Discover Content",
+                body: "Use the Discover tab to search the web for all publicly available interviews and talks. Preview results and add them in bulk — the system checks for duplicates automatically.",
+              },
+              {
+                step: "4", title: "Identify the Speaker",
+                body: "For interviews with multiple speakers, go to Transcripts → open the source → click Identify Speaker. Pick which voice is the master. The other speakers can be labelled as Interviewer (questions kept as context) or Translator.",
+              },
+              {
+                step: "5", title: "Chat",
+                body: "Go to the Chat tab and ask anything. Answers are drawn directly from the master's actual words. Enable Voice to hear answers in their voice. Enable Conversation Mode to ask natural follow-up questions.",
+              },
+              {
+                step: "6", title: "Generate a Book",
+                body: "Go to Knowledge → Generate Book. The AI writes a structured, chapter-based book from all indexed content — in the master's own voice. You can focus it on a specific topic, or export as a PDF.",
+              },
+              {
+                step: "7", title: "Media & Voice",
+                body: "Upload photos in the Media tab — they're included in the PDF book. Clone the master's voice from audio sources using ElevenLabs, or pick a free preset voice for text-to-speech.",
+              },
+            ].map(({ step, title, body }) => (
+              <div key={step} style={{ display: "flex", gap: 14, marginBottom: 18 }}>
+                <div style={{ width: 26, height: 26, borderRadius: "50%", background: "rgba(99,102,241,0.12)", border: "1.5px solid rgba(99,102,241,0.25)", color: "var(--accent)", fontSize: 12, fontWeight: 700, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, marginTop: 1 }}>
+                  {step}
+                </div>
+                <div>
+                  <p style={{ fontSize: 13.5, fontWeight: 700, color: "var(--text-primary)", margin: "0 0 4px", letterSpacing: "-0.01em" }}>{title}</p>
+                  <p style={{ fontSize: 12.5, color: "var(--text-secondary)", margin: 0, lineHeight: 1.6 }}>{body}</p>
+                </div>
+              </div>
+            ))}
+
+            <div style={{ marginTop: 4, padding: "12px 14px", borderRadius: 10, background: "rgba(99,102,241,0.06)", border: "1px solid rgba(99,102,241,0.15)" }}>
+              <p style={{ fontSize: 12, color: "var(--text-secondary)", margin: 0, lineHeight: 1.6 }}>
+                <strong style={{ color: "var(--text-primary)" }}>Tip:</strong> Hover the <strong>ⓘ</strong> icon on any tab or button for a quick description of what it does.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
