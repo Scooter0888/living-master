@@ -18,6 +18,7 @@ from app.database import init_db, engine
 from app.routers import masters, ingest, query, discover, sources
 from app.routers import media as media_router_module
 from app.routers import voice as voice_router_module
+from app.routers import backup as backup_router_module
 from sqlalchemy import text
 
 # Structured logging
@@ -173,6 +174,7 @@ app.include_router(sources.router)
 app.include_router(export_router.router)
 app.include_router(media_router_module.router)
 app.include_router(voice_router_module.router)
+app.include_router(backup_router_module.router)
 
 # Serve uploaded photos as static files
 _photos_path = get_settings().photos_path

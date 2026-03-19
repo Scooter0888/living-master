@@ -3,7 +3,7 @@ import { useEffect, useState, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
-import { ArrowLeft, MessageSquare, Database, Search, BookOpen, Image, Trash2, ScrollText } from "lucide-react";
+import { ArrowLeft, MessageSquare, Database, Search, BookOpen, Image, Trash2, ScrollText, HardDrive } from "lucide-react";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { MasterAvatar } from "@/components/MasterAvatar";
 import { ChatInterface } from "@/components/ChatInterface";
@@ -14,9 +14,10 @@ import { KnowledgePanel } from "@/components/KnowledgePanel";
 import { PhotoGallery } from "@/components/PhotoGallery";
 import { VoicePanel } from "@/components/VoicePanel";
 import { TranscriptViewer } from "@/components/TranscriptViewer";
+import BackupPanel from "@/components/BackupPanel";
 import { api, Master, Source, Capabilities } from "@/lib/api";
 
-type Tab = "chat" | "sources" | "discover" | "knowledge" | "media" | "transcripts";
+type Tab = "chat" | "sources" | "discover" | "knowledge" | "media" | "transcripts" | "backup";
 
 const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "chat",        label: "Chat",        icon: <MessageSquare size={13} /> },
@@ -25,6 +26,7 @@ const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "knowledge",   label: "Knowledge",   icon: <BookOpen size={13} /> },
   { id: "media",       label: "Media",       icon: <Image size={13} /> },
   { id: "transcripts", label: "Transcripts", icon: <ScrollText size={13} /> },
+  { id: "backup",      label: "Backup",      icon: <HardDrive size={13} /> },
 ];
 
 export default function MasterPage() {
@@ -449,6 +451,14 @@ export default function MasterPage() {
                   <PhotoGallery masterId={masterId} />
                 </div>
                 <VoicePanel master={master} onVoiceReady={() => fetchMaster()} />
+              </div>
+            </motion.div>
+          )}
+
+          {tab === "backup" && (
+            <motion.div key="backup" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }}>
+              <div style={{ maxWidth: 560, margin: "0 auto" }}>
+                <BackupPanel />
               </div>
             </motion.div>
           )}

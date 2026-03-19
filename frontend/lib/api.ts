@@ -359,6 +359,47 @@ export const api = {
     },
   },
 
+  backup: {
+    status: () =>
+      request<{
+        data_dir: string;
+        components: Record<string, { exists: boolean; size_mb: number; files: number }>;
+        total_size_mb: number;
+        estimated_zip_mb: number;
+      }>("/backup/status"),
+
+    exportUrl: () => `${API_BASE}/backup/export${ACCESS_TOKEN ? `?token=${encodeURIComponent(ACCESS_TOKEN)}` : ""}`,
+
+    exportDownload: async (): Promise<void> => {
+      const res = await fetch(`${API_BASE}/backup/export`, {
+        headers: ACCESS_TOKEN ? { "X-Access-Token": ACCESS_TOKEN } : {},
+      });
+      if (!res.ok) throw new Error(`Export failed: ${res.statusText}`);
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "living_master_backup.zip";
+      a.click();
+      URL.revokeObjectURL(url);
+    },
+
+    import: async (file: File): Promise<{ status: string; restored: string[]; skipped: string[]; message: string }> => {
+      const form = new FormData();
+      form.append("file", file);
+      const res = await fetch(`${API_BASE}/backup/import`, {
+        method: "POST",
+        headers: ACCESS_TOKEN ? { "X-Access-Token": ACCESS_TOKEN } : {},
+        body: form,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: res.statusText }));
+        throw new Error(err.detail || `Import failed: ${res.status}`);
+      }
+      return res.json();
+    },
+  },
+
   capabilities: () => request<Capabilities>("/capabilities"),
 
   discover: {
