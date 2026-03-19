@@ -52,20 +52,22 @@ export function MasterCard({ master, onUpdated }: { master: Master; onUpdated?: 
         <div style={{ display: "flex", alignItems: "center", gap: 13 }}>
           <MasterAvatar master={master} size={42} borderRadius="50%" />
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div>
               <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)", letterSpacing: "-0.02em", lineHeight: 1.3 }}>
                 {master.name}
               </span>
+            </div>
+            <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", display: "flex", alignItems: "center", gap: 5 }}>
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {master.description || (master.source_count > 0
+                  ? `${master.source_count} source${master.source_count !== 1 ? "s" : ""}`
+                  : "No sources yet")}
+              </span>
               {isPrivate && (
-                <span style={{ fontSize: 10, fontWeight: 600, color: "#d97706", background: "rgba(245,158,11,0.1)", border: "1px solid rgba(245,158,11,0.2)", borderRadius: 6, padding: "1px 6px", letterSpacing: "0.02em" }}>
-                  PRIVATE
+                <span style={{ fontSize: 9, fontWeight: 500, color: "#b45309", background: "rgba(245,158,11,0.08)", border: "1px solid rgba(245,158,11,0.18)", borderRadius: 4, padding: "0px 5px", letterSpacing: "0.04em", flexShrink: 0 }}>
+                  private
                 </span>
               )}
-            </div>
-            <div style={{ fontSize: 11.5, color: "var(--text-muted)", marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {master.description || (master.source_count > 0
-                ? `${master.source_count} source${master.source_count !== 1 ? "s" : ""}`
-                : "No sources yet")}
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
