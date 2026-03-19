@@ -49,6 +49,10 @@ class IdentifySpeakerRequest(BaseModel):
     master_speaker: str
 
 
+class AutoIdentifyRequest(BaseModel):
+    confidence_threshold: float = 0.15  # min cosine similarity gap vs next-best speaker
+
+
 # ---------------------------------------------------------------------------
 # Voice options catalog
 # ---------------------------------------------------------------------------
@@ -336,3 +340,204 @@ async def identify_speaker(
 
     background_tasks.add_task(_reindex)
     return {"status": "processing", "message": "Re-indexing with master speaker only"}
+
+
+# ---------------------------------------------------------------------------
+# Auto-identify master speaker across ALL diarized sources
+# ---------------------------------------------------------------------------
+
+@router.post("/auto-identify-all")
+async def auto_identify_all_speakers(
+    master_id: str,
+    body: AutoIdentifyRequest,
+    background_tasks: BackgroundTasks,
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Automatically identify the master's speaker track across all diarized sources
+    that haven't been labelled yet.
+
+    Strategy:
+    1. Collect text from sources already confirmed as the master's voice
+       (sources where speaker_label is set).
+    2. Embed all speaker sample texts from unidentified diarized sources.
+    3. Compare each speaker's embedding to the master's confirmed speech centroid
+       using cosine similarity.
+    4. Auto-label the closest speaker if the confidence gap vs next-best exceeds
+       `confidence_threshold`. Falls back to best match if only one speaker present.
+
+    Returns immediately with a list of sources queued for processing.
+    """
+    import json as _json
+
+    result = await db.execute(select(Master).where(Master.id == master_id))
+    master = result.scalar_one_or_none()
+    if not master:
+        raise HTTPException(status_code=404, detail="Master not found")
+
+    # ── 1. Get confirmed master speech from already-labelled sources ──────────
+    confirmed_result = await db.execute(
+        select(Source).where(
+            Source.master_id == master_id,
+            Source.status == IngestionStatus.completed,
+            Source.speaker_label.isnot(None),
+            Source.speaker_samples_json.isnot(None),
+        )
+    )
+    confirmed_sources = confirmed_result.scalars().all()
+
+    confirmed_texts: list[str] = []
+    for src in confirmed_sources:
+        try:
+            samples = _json.loads(src.speaker_samples_json or "{}")
+            spk_texts = samples.get(src.speaker_label, [])
+            confirmed_texts.extend(spk_texts)
+        except Exception:
+            pass
+
+    if not confirmed_texts:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"No confirmed {master.name} speech found yet. "
+                "Manually identify the speaker in at least one source first — "
+                "then auto-identify will work for the rest."
+            ),
+        )
+
+    # ── 2. Find unidentified diarized sources ─────────────────────────────────
+    unidentified_result = await db.execute(
+        select(Source).where(
+            Source.master_id == master_id,
+            Source.has_diarization == True,
+            Source.speaker_label.is_(None),
+            Source.speaker_samples_json.isnot(None),
+            Source.status.in_([IngestionStatus.completed, IngestionStatus.needs_speaker_id]),
+        )
+    )
+    unidentified = unidentified_result.scalars().all()
+
+    if not unidentified:
+        return {
+            "queued": 0,
+            "message": "No unidentified diarized sources found — all sources are already labelled.",
+            "results": [],
+        }
+
+    # ── 3. Build master speech embedding centroid ─────────────────────────────
+    from app.services.embeddings import embed_texts
+    import numpy as np
+
+    confirmed_embeddings = await embed_texts(confirmed_texts[:20])  # cap at 20 samples
+    centroid = np.mean(confirmed_embeddings, axis=0)
+    centroid = centroid / np.linalg.norm(centroid)  # normalise
+
+    # ── 4. Score each unidentified source ─────────────────────────────────────
+    queued = []
+    for src in unidentified:
+        try:
+            samples = _json.loads(src.speaker_samples_json or "{}")
+        except Exception:
+            continue
+        if not samples:
+            continue
+
+        # Embed each speaker's sample texts (concatenated)
+        speaker_scores: dict[str, float] = {}
+        speaker_texts = {spk: " ".join(txts) for spk, txts in samples.items() if txts}
+        if not speaker_texts:
+            continue
+
+        spk_list = list(speaker_texts.keys())
+        spk_embeds = await embed_texts([speaker_texts[s] for s in spk_list])
+
+        for spk, emb in zip(spk_list, spk_embeds):
+            vec = np.array(emb)
+            vec = vec / np.linalg.norm(vec)
+            speaker_scores[spk] = float(np.dot(centroid, vec))
+
+        sorted_spks = sorted(speaker_scores.items(), key=lambda x: x[1], reverse=True)
+        best_spk, best_score = sorted_spks[0]
+        second_score = sorted_spks[1][1] if len(sorted_spks) > 1 else -1.0
+        gap = best_score - second_score
+
+        # Accept if gap is large enough OR only one speaker
+        confident = len(sorted_spks) == 1 or gap >= body.confidence_threshold
+
+        queued.append({
+            "source_id": src.id,
+            "source_title": src.title or src.url or src.id,
+            "matched_speaker": best_spk,
+            "score": round(best_score, 3),
+            "gap": round(gap, 3),
+            "confident": confident,
+            "speaker_scores": {k: round(v, 3) for k, v in speaker_scores.items()},
+        })
+
+    # ── 5. Fire off reindex tasks for confident matches ───────────────────────
+    confident_matches = [q for q in queued if q["confident"]]
+
+    async def _reindex_source(source_id: str, master_speaker: str):
+        from app.database import AsyncSessionLocal
+        from app.services.vector_store import delete_source_chunks, add_documents, get_source_chunks
+        from app.services.embeddings import chunk_text, embed_texts as _embed
+
+        async with AsyncSessionLocal() as db2:
+            r = await db2.execute(select(Source).where(Source.id == source_id))
+            src = r.scalar_one_or_none()
+            if not src:
+                return
+            src.speaker_label = master_speaker
+            src.status = IngestionStatus.processing
+            await db2.commit()
+
+            try:
+                existing = await get_source_chunks(master_id, source_id)
+                master_chunks = [
+                    c for c in existing
+                    if c.get("speaker") == master_speaker or not c.get("speaker")
+                ] or existing
+
+                text = " ".join(c["text"] for c in master_chunks)
+                chunks = chunk_text(text)
+                if not chunks:
+                    src.status = IngestionStatus.completed
+                    await db2.commit()
+                    return
+
+                embeddings = await _embed(chunks)
+                metadatas = [
+                    {
+                        "source_id": source_id,
+                        "master_id": master_id,
+                        "title": src.title or "Untitled",
+                        "url": src.url or "",
+                        "content_type": src.content_type.value if hasattr(src.content_type, "value") else str(src.content_type),
+                        "chunk_index": i,
+                        "speaker": master_speaker,
+                    }
+                    for i in range(len(chunks))
+                ]
+                await delete_source_chunks(master_id, source_id)
+                await add_documents(master_id, source_id, chunks, metadatas, embeddings)
+                src.status = IngestionStatus.completed
+                src.chunk_count = len(chunks)
+            except Exception as e:
+                print(f"[AutoIdentify] Reindex failed for {source_id}: {e}")
+                src.status = IngestionStatus.completed
+            await db2.commit()
+
+    for match in confident_matches:
+        background_tasks.add_task(_reindex_source, match["source_id"], match["matched_speaker"])
+
+    low_confidence = [q for q in queued if not q["confident"]]
+
+    return {
+        "queued": len(confident_matches),
+        "low_confidence": len(low_confidence),
+        "message": (
+            f"Auto-identified {master.name} in {len(confident_matches)} source(s). "
+            + (f"{len(low_confidence)} source(s) need manual review (low confidence)." if low_confidence else "")
+        ),
+        "results": queued,
+    }

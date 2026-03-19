@@ -60,6 +60,9 @@ export function SourceLibrary({ sources, masterId, masterName = "Master", onDele
   const [viewingSource, setViewingSource] = useState<Source | null>(initialViewSource ?? null);
   const [speakerSource, setSpeakerSource] = useState<Source | null>(null);
   const [analysingId, setAnalysingId] = useState<string | null>(null);
+  const [autoIdentifying, setAutoIdentifying] = useState(false);
+  const [autoIdentifyResult, setAutoIdentifyResult] = useState<{ queued: number; low_confidence: number; message: string } | null>(null);
+  const [autoIdentifyError, setAutoIdentifyError] = useState<string | null>(null);
   const hasProcessing = sources.some((s) => s.status === "processing" || s.status === "pending" || s.status === "needs_speaker_id");
 
   useEffect(() => {
@@ -108,6 +111,21 @@ export function SourceLibrary({ sources, masterId, masterName = "Master", onDele
       setTimeout(onRefresh, 500);
     } catch (err) { console.error(err); }
     finally { setReuploadingId(null); reuploadTargetRef.current = null; }
+  };
+
+  const handleAutoIdentify = async () => {
+    setAutoIdentifying(true);
+    setAutoIdentifyResult(null);
+    setAutoIdentifyError(null);
+    try {
+      const res = await api.voice.autoIdentifyAll(masterId);
+      setAutoIdentifyResult({ queued: res.queued, low_confidence: res.low_confidence ?? 0, message: res.message });
+      if (res.queued > 0) setTimeout(onRefresh, 2000);
+    } catch (e: any) {
+      setAutoIdentifyError(e.message || "Auto-identify failed");
+    } finally {
+      setAutoIdentifying(false);
+    }
   };
 
   const handleAnalyseMovements = async (source: Source) => {
@@ -161,6 +179,59 @@ export function SourceLibrary({ sources, masterId, masterName = "Master", onDele
           <RefreshCw size={12} style={{ animation: hasProcessing ? "spin 1.5s linear infinite" : "none" }} />
         </button>
       </div>
+
+      {/* Auto-identify banner — shown when there are unidentified diarized sources */}
+      {(() => {
+        const unidentified = sources.filter(
+          s => s.has_diarization && !s.speaker_label && (s.status === "completed" || s.status === "needs_speaker_id")
+        );
+        if (unidentified.length === 0 && !autoIdentifyResult && !autoIdentifyError) return null;
+        return (
+          <div style={{
+            marginBottom: 14, padding: "12px 14px", borderRadius: 10,
+            background: autoIdentifyResult ? "rgba(22,163,74,0.06)" : "rgba(99,102,241,0.06)",
+            border: `1px solid ${autoIdentifyResult ? "rgba(22,163,74,0.2)" : "rgba(99,102,241,0.2)"}`,
+            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap",
+          }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              {autoIdentifyResult ? (
+                <p style={{ fontSize: 12.5, color: "var(--color-success, #16a34a)", margin: 0, fontWeight: 500 }}>
+                  {autoIdentifyResult.message}
+                </p>
+              ) : autoIdentifyError ? (
+                <p style={{ fontSize: 12.5, color: "var(--color-error)", margin: 0 }}>{autoIdentifyError}</p>
+              ) : (
+                <>
+                  <p style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 2px" }}>
+                    <Users size={12} style={{ display: "inline", marginRight: 5, verticalAlign: "middle" }} />
+                    {unidentified.length} source{unidentified.length !== 1 ? "s" : ""} need speaker identification
+                  </p>
+                  <p style={{ fontSize: 11.5, color: "var(--text-muted)", margin: 0 }}>
+                    Once you&apos;ve identified {masterName} in one source, click to auto-label the rest.
+                  </p>
+                </>
+              )}
+            </div>
+            {!autoIdentifyResult && (
+              <button
+                onClick={handleAutoIdentify}
+                disabled={autoIdentifying}
+                style={{
+                  display: "flex", alignItems: "center", gap: 6, flexShrink: 0,
+                  padding: "7px 14px", borderRadius: 8, fontSize: 12, fontWeight: 600,
+                  background: "rgba(99,102,241,0.12)", border: "1px solid rgba(99,102,241,0.3)",
+                  color: "#6366f1", cursor: autoIdentifying ? "not-allowed" : "pointer",
+                  opacity: autoIdentifying ? 0.6 : 1, transition: "opacity 0.15s",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                <Users size={12} style={{ animation: autoIdentifying ? "spin 1s linear infinite" : "none" }} />
+                {autoIdentifying ? "Identifying…" : `Auto-identify ${masterName}`}
+              </button>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Table */}
       <div style={{ borderRadius: 12, border: "1px solid var(--border)", overflow: "hidden" }}>

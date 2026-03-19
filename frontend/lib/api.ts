@@ -285,6 +285,21 @@ export const api = {
         method: "POST",
         body: JSON.stringify({ source_id: sourceId, master_speaker: masterSpeaker }),
       }),
+    autoIdentifyAll: (masterId: string) =>
+      request<{
+        queued: number;
+        low_confidence: number;
+        message: string;
+        results: {
+          source_id: string;
+          source_title: string;
+          matched_speaker: string;
+          score: number;
+          gap: number;
+          confident: boolean;
+          speaker_scores: Record<string, number>;
+        }[];
+      }>(`/masters/${masterId}/voice/auto-identify-all`, { method: "POST", body: JSON.stringify({}) }),
   },
 
   export: {
