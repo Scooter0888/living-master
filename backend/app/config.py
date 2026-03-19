@@ -14,7 +14,8 @@ class Settings(BaseSettings):
 
     app_env: str = "development"
     cors_origins: str = "http://localhost:3000"
-    access_token: str = "change_this_to_a_secure_token"
+    access_token: str = "change_this_to_a_secure_token"   # admin — full access
+    shared_token: str = ""                                  # viewer — public masters only
 
     # DATA_DIR: Railway sets this to /data (volume mount) so data persists across deploys.
     # Locally defaults to the backend directory so existing data paths are unchanged.

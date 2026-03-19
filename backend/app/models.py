@@ -43,6 +43,7 @@ class Master(Base):
     voice_id = Column(String, nullable=True)
     voice_status = Column(String, default="none")  # "none" | "cloning" | "ready"
     profile_photo_path = Column(Text, nullable=True)
+    is_private = Column(Boolean, default=False)     # True = admin-only; False = visible to shared users
 
     sources = relationship("Source", back_populates="master", cascade="all, delete-orphan")
     photos = relationship("Photo", back_populates="master", cascade="all, delete-orphan")

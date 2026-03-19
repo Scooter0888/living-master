@@ -137,7 +137,7 @@ export default function HomePage() {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: i * 0.04, duration: 0.3, ease: [0.16, 1, 0.3, 1] }}
                 >
-                  <MasterCard master={master} />
+                  <MasterCard master={master} onUpdated={(updated) => setMasters(prev => prev.map(m => m.id === updated.id ? updated : m))} />
                 </motion.div>
               ))}
             </div>

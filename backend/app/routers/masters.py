@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, case
 from pydantic import BaseModel, field_validator
@@ -66,11 +66,12 @@ def _serialize_master(master: Master, source_count: int = 0, total_chunks: int =
         "updated_at": master.updated_at.isoformat() if master.updated_at else None,
         "voice_id": master.voice_id,
         "voice_status": master.voice_status or "none",
+        "is_private": bool(master.is_private),
     }
 
 
 @router.get("/")
-async def list_masters(db: AsyncSession = Depends(get_db)):
+async def list_masters(request: Request, db: AsyncSession = Depends(get_db)):
     # Single query with LEFT JOIN — avoids N+1 per master
     stmt = (
         select(
@@ -91,7 +92,12 @@ async def list_masters(db: AsyncSession = Depends(get_db)):
     )
     result = await db.execute(stmt)
     rows = result.all()
-    return [_serialize_master(row.Master, row.source_count, row.total_chunks) for row in rows]
+    role = getattr(request.state, "role", "viewer")
+    return [
+        _serialize_master(row.Master, row.source_count, row.total_chunks)
+        for row in rows
+        if role == "admin" or not row.Master.is_private
+    ]
 
 
 @router.post("/", status_code=201)
@@ -109,10 +115,13 @@ async def create_master(body: MasterCreate, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/{master_id}")
-async def get_master(master_id: str, db: AsyncSession = Depends(get_db)):
+async def get_master(master_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Master).where(Master.id == master_id))
     master = result.scalar_one_or_none()
     if not master:
+        raise HTTPException(status_code=404, detail="Master not found")
+    role = getattr(request.state, "role", "viewer")
+    if master.is_private and role != "admin":
         raise HTTPException(status_code=404, detail="Master not found")
 
     sources_result = await db.execute(
@@ -198,6 +207,20 @@ async def delete_profile_photo(
         os.unlink(master.profile_photo_path)
     master.profile_photo_path = None
     await db.commit()
+
+
+@router.post("/{master_id}/toggle-privacy")
+async def toggle_privacy(master_id: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """Toggle a master between private (admin-only) and public (shared). Admin only."""
+    if getattr(request.state, "role", "viewer") != "admin":
+        raise HTTPException(status_code=403, detail="Admin only")
+    result = await db.execute(select(Master).where(Master.id == master_id))
+    master = result.scalar_one_or_none()
+    if not master:
+        raise HTTPException(status_code=404, detail="Master not found")
+    master.is_private = not bool(master.is_private)
+    await db.commit()
+    return {"is_private": master.is_private}
 
 
 @router.delete("/{master_id}", status_code=204)

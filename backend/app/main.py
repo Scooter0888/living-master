@@ -42,6 +42,7 @@ async def lifespan(app: FastAPI):
     # Safe column migrations — no-op if column already exists
     async with engine.begin() as conn:
         for stmt in [
+            "ALTER TABLE masters ADD COLUMN is_private INTEGER DEFAULT 0",
             "ALTER TABLE sources ADD COLUMN word_count INTEGER DEFAULT 0",
             "ALTER TABLE masters ADD COLUMN voice_id TEXT",
             "ALTER TABLE masters ADD COLUMN voice_status TEXT DEFAULT 'none'",
@@ -154,8 +155,15 @@ async def logging_and_auth(request: Request, call_next):
     # Auth check (skip for health, docs, and CORS preflight)
     if request.method != "OPTIONS" and request.url.path not in ("/health", "/docs", "/openapi.json", "/redoc"):
         token = request.headers.get("X-Access-Token")
-        if settings.app_env == "production" and token != settings.access_token:
-            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+        if settings.app_env == "production":
+            if token == settings.access_token:
+                request.state.role = "admin"
+            elif settings.shared_token and token == settings.shared_token:
+                request.state.role = "viewer"
+            else:
+                return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+        else:
+            request.state.role = "admin"  # dev: always admin
 
     response = await call_next(request)
     duration_ms = round((time.monotonic() - start) * 1000)
@@ -189,9 +197,14 @@ async def health():
 
 @app.get("/auth/verify")
 async def verify_auth():
-    """Token validation endpoint — returns 200 if the access token is valid, 401 otherwise.
-    Auth is enforced by the logging_and_auth middleware above."""
+    """Token validation endpoint — returns 200 if valid, 401 otherwise."""
     return {"ok": True}
+
+
+@app.get("/auth/me")
+async def auth_me(request: Request):
+    """Return the current user's role: 'admin' or 'viewer'."""
+    return {"role": getattr(request.state, "role", "viewer")}
 
 
 @app.get("/capabilities")

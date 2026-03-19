@@ -2,7 +2,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { Sparkles, Lock, Eye, EyeOff, Loader2 } from "lucide-react";
-import { saveToken, isAuthenticated } from "@/lib/auth";
+import { saveToken, saveRole, isAuthenticated } from "@/lib/auth";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
@@ -30,6 +30,12 @@ export default function LoginPage() {
       });
       if (res.ok) {
         saveToken(password.trim());
+        // Fetch role so UI can show admin controls
+        try {
+          const me = await fetch(`${API_BASE}/auth/me`, { headers: { "X-Access-Token": password.trim() } });
+          const data = await me.json();
+          saveRole(data.role || "viewer");
+        } catch { saveRole("viewer"); }
         router.replace("/");
       } else {
         setError("Incorrect password. Try again.");

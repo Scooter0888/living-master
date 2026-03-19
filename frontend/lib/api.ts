@@ -44,6 +44,7 @@ export interface Master {
   sources?: Source[];
   voice_id?: string;
   voice_status?: "none" | "cloning" | "ready";
+  is_private?: boolean;
 }
 
 export interface Source {
@@ -168,6 +169,8 @@ export const api = {
       request<Master>(`/masters/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
     delete: (id: string) =>
       fetch(`${API_BASE}/masters/${id}`, { method: "DELETE", headers: headers() }),
+    togglePrivacy: (id: string) =>
+      request<{ is_private: boolean }>(`/masters/${id}/toggle-privacy`, { method: "POST" }),
     uploadProfilePhoto: (id: string, file: File) => {
       const form = new FormData();
       form.append("file", file);
@@ -427,6 +430,8 @@ export const api = {
       return res.json();
     },
   },
+
+  authMe: () => request<{ role: "admin" | "viewer" }>("/auth/me"),
 
   capabilities: () => request<Capabilities>("/capabilities"),
 
