@@ -23,7 +23,7 @@ from app.database import get_db
 from app.models import Master, Source, IngestionStatus, ContentType
 from app.services.ingestion import ingest_url, ingest_file, detect_content_type
 from app.services.embeddings import chunk_text, embed_texts
-from app.services.vector_store import add_documents, delete_source_chunks
+from app.services.vector_store import add_documents, delete_source_chunks, find_duplicate_sources
 from app.config import get_settings
 from app.services.diarization import count_unique_speakers, get_speaker_samples
 
@@ -693,6 +693,20 @@ async def reingest_source(
 
     background_tasks.add_task(_reingest)
     return {"source_id": source_id, "status": "processing", "message": f"Re-ingesting {url}"}
+
+
+@router.get("/duplicates")
+async def check_duplicates(
+    master_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Find duplicate or near-duplicate sources based on embedding similarity."""
+    result = await db.execute(select(Master).where(Master.id == master_id))
+    if not result.scalar_one_or_none():
+        raise HTTPException(status_code=404, detail="Master not found")
+
+    duplicates = await find_duplicate_sources(master_id)
+    return {"duplicates": duplicates, "count": len(duplicates)}
 
 
 @router.delete("/sources/{source_id}", status_code=204)

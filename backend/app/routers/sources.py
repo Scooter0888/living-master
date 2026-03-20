@@ -5,7 +5,8 @@ from pydantic import BaseModel
 
 from app.database import get_db
 from app.models import Source, IngestionStatus
-from app.services.vector_store import get_source_chunks
+from app.services.vector_store import get_source_chunks, update_chunk
+from app.services.embeddings import embed_texts
 
 router = APIRouter(prefix="/sources", tags=["sources"])
 
@@ -32,6 +33,10 @@ SUPPORTED_LANGUAGES = {
     "Norwegian": "Norwegian",
     "Danish": "Danish",
 }
+
+
+class UpdateChunkRequest(BaseModel):
+    text: str
 
 
 class TranslateRequest(BaseModel):
@@ -93,6 +98,51 @@ async def get_source_transcript(source_id: str, db: AsyncSession = Depends(get_d
         "speaker_label": source.speaker_label,    # master's speaker ID e.g. "SPEAKER_00"
         "has_diarization": source.has_diarization or False,
     }
+
+
+@router.get("/{source_id}/chunks")
+async def get_chunks(source_id: str, db: AsyncSession = Depends(get_db)):
+    """Return all indexed chunks for a source, ordered by chunk_index."""
+    result = await db.execute(select(Source).where(Source.id == source_id))
+    source = result.scalar_one_or_none()
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    chunks = await get_source_chunks(source.master_id, source_id)
+    return {"source_id": source_id, "chunks": chunks}
+
+
+@router.patch("/{source_id}/chunks/{chunk_index}")
+async def edit_chunk(
+    source_id: str,
+    chunk_index: int,
+    body: UpdateChunkRequest,
+    db: AsyncSession = Depends(get_db),
+):
+    """Update a chunk's text and re-embed it in the vector store."""
+    result = await db.execute(select(Source).where(Source.id == source_id))
+    source = result.scalar_one_or_none()
+    if not source:
+        raise HTTPException(status_code=404, detail="Source not found")
+
+    new_text = body.text.strip()
+    if not new_text:
+        raise HTTPException(status_code=400, detail="Chunk text cannot be empty")
+
+    # Re-embed the edited text
+    embeddings = await embed_texts([new_text])
+
+    ok = await update_chunk(
+        master_id=source.master_id,
+        source_id=source_id,
+        chunk_index=chunk_index,
+        new_text=new_text,
+        new_embedding=embeddings[0],
+    )
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to update chunk in vector store")
+
+    return {"status": "updated", "chunk_index": chunk_index}
 
 
 @router.post("/{source_id}/translate")

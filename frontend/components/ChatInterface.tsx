@@ -1,9 +1,16 @@
 "use client";
 import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Send, RotateCcw, Volume2, VolumeX, Mic, MicOff, Sparkles } from "lucide-react";
+import { Send, RotateCcw, Volume2, VolumeX, Mic, MicOff, Sparkles, ExternalLink, Save, FolderOpen, Download, X, Trash2 } from "lucide-react";
 import { api, Master } from "@/lib/api";
 import { MasterAvatar } from "@/components/MasterAvatar";
+
+interface SourceRef {
+  title: string;
+  url: string;
+  content_type: string;
+  score: number;
+}
 
 interface Message {
   id: string;
@@ -13,6 +20,8 @@ interface Message {
   isInference?: boolean;        // contextual inference mode response
   noMaterial?: boolean;         // strict mode found no direct answer — offer inference
   sourceQuestion?: string;      // the question to retry in contextual mode
+  sources?: SourceRef[];        // sources used to generate this answer
+  followUps?: string[];         // context-aware follow-up questions
 }
 
 const STARTERS = [
@@ -43,6 +52,14 @@ export function ChatInterface({ master }: { master: Master }) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const recognitionRef = useRef<any>(null);
+
+  // Conversation save/load state
+  const [savedConvoId, setSavedConvoId] = useState<string | null>(null);
+  const [showConvoList, setShowConvoList] = useState(false);
+  const [convoList, setConvoList] = useState<{ id: string; title: string; message_count: number; created_at: string }[]>([]);
+  const [loadingConvos, setLoadingConvos] = useState(false);
+  const [savingConvo, setSavingConvo] = useState(false);
+  const [saveFlash, setSaveFlash] = useState(false);
 
   const voiceAvailable = !!master.voice_id || master.voice_status === "ready";
   const speechSupported = typeof window !== "undefined" && !!(window.SpeechRecognition || window.webkitSpeechRecognition);
@@ -134,15 +151,32 @@ export function ChatInterface({ master }: { master: Master }) {
         full += chunk;
         setMessages((prev) => prev.map((m) => m.id === aId ? { ...m, content: full } : m));
       }
+
+      // Extract sources if appended by backend
+      let sources: SourceRef[] = [];
+      let displayText = full;
+      const srcIdx = full.indexOf("\n[SOURCES]");
+      if (srcIdx !== -1) {
+        displayText = full.slice(0, srcIdx);
+        try { sources = JSON.parse(full.slice(srcIdx + 10)); } catch {}
+      }
+
       // Mark whether this response found no direct material (offer contextual inference)
-      const isNoMaterial = mode === "strict" && full.toLowerCase().includes(NO_MATERIAL_PHRASE);
+      const isNoMaterial = mode === "strict" && displayText.toLowerCase().includes(NO_MATERIAL_PHRASE);
       setMessages((prev) => prev.map((m) => m.id === aId
-        ? { ...m, streaming: false, noMaterial: isNoMaterial, sourceQuestion: isNoMaterial ? q : undefined }
+        ? { ...m, content: displayText, streaming: false, noMaterial: isNoMaterial, sourceQuestion: isNoMaterial ? q : undefined, sources }
         : m
       ));
 
-      if (voiceEnabled && full && !isNoMaterial) {
-        await playVoice(full);
+      // Fetch context-aware follow-up suggestions (non-blocking)
+      if (!isNoMaterial && displayText.length > 20) {
+        api.query.followUps(master.id, q, displayText).then(({ questions }) => {
+          setMessages((prev) => prev.map((m) => m.id === aId ? { ...m, followUps: questions } : m));
+        }).catch(() => {});
+      }
+
+      if (voiceEnabled && displayText && !isNoMaterial) {
+        await playVoice(displayText);
         if (conversationMode) setTimeout(() => startListening(), 400);
       }
     } catch (e: any) {
@@ -167,8 +201,84 @@ export function ChatInterface({ master }: { master: Master }) {
     }
   };
 
+  const saveConversation = async () => {
+    if (messages.length === 0 || savingConvo) return;
+    setSavingConvo(true);
+    try {
+      const payload = messages.filter(m => !m.streaming).map(m => ({
+        role: m.role,
+        content: m.content,
+        ...(m.sources ? { sources: m.sources } : {}),
+      }));
+      const res = await api.conversations.save(master.id, payload);
+      setSavedConvoId(res.id);
+      setSaveFlash(true);
+      setTimeout(() => setSaveFlash(false), 2000);
+    } catch (e) {
+      console.error("Failed to save conversation:", e);
+    } finally {
+      setSavingConvo(false);
+    }
+  };
+
+  const loadConversationList = async () => {
+    setShowConvoList(true);
+    setLoadingConvos(true);
+    try {
+      const list = await api.conversations.list(master.id);
+      setConvoList(list);
+    } catch (e) {
+      console.error("Failed to load conversations:", e);
+    } finally {
+      setLoadingConvos(false);
+    }
+  };
+
+  const loadConversation = async (convoId: string) => {
+    try {
+      const convo = await api.conversations.get(master.id, convoId);
+      const loaded: Message[] = convo.messages.map((m: any, i: number) => ({
+        id: `loaded-${i}-${Date.now()}`,
+        role: m.role,
+        content: m.content,
+        sources: m.sources || undefined,
+      }));
+      setMessages(loaded);
+      setSavedConvoId(convoId);
+      setShowConvoList(false);
+    } catch (e) {
+      console.error("Failed to load conversation:", e);
+    }
+  };
+
+  const deleteConversation = async (convoId: string) => {
+    try {
+      await api.conversations.delete(master.id, convoId);
+      setConvoList((prev) => prev.filter((c) => c.id !== convoId));
+      if (savedConvoId === convoId) setSavedConvoId(null);
+    } catch (e) {
+      console.error("Failed to delete conversation:", e);
+    }
+  };
+
+  const exportConversation = async () => {
+    if (!savedConvoId) return;
+    try {
+      const data = await api.conversations.exportJson(master.id, savedConvoId);
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${data.title.replace(/[^a-zA-Z0-9]/g, "_")}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      console.error("Failed to export conversation:", e);
+    }
+  };
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--surface)" }}>
+    <div style={{ display: "flex", flexDirection: "column", height: "100%", background: "var(--surface)", position: "relative" }}>
       {/* Messages */}
       <div style={{ flex: 1, overflowY: "auto", padding: "28px 28px 8px" }}>
         {messages.length === 0 && (
@@ -255,6 +365,36 @@ export function ChatInterface({ master }: { master: Master }) {
                     {msg.content || (msg.streaming && <span style={{ color: "var(--text-muted)", fontStyle: "italic" }}>Thinking…</span>)}
                     {msg.streaming && msg.content && <span className="cursor-blink" />}
                   </div>
+                  {/* source attribution */}
+                  {msg.sources && msg.sources.length > 0 && !msg.streaming && (
+                    <div style={{
+                      display: "flex", flexWrap: "wrap", gap: 6, marginTop: 2,
+                    }}>
+                      {msg.sources.map((src, i) => (
+                        <div key={i} style={{
+                          display: "inline-flex", alignItems: "center", gap: 4,
+                          padding: "3px 8px", borderRadius: 6, fontSize: 10.5,
+                          background: "var(--surface-3)", border: "1px solid var(--border)",
+                          color: "var(--text-muted)", maxWidth: 220, overflow: "hidden",
+                          textOverflow: "ellipsis", whiteSpace: "nowrap",
+                        }}>
+                          <span style={{ fontSize: 9, opacity: 0.5 }}>
+                            {src.content_type === "youtube" ? "▶" : src.content_type === "pdf" ? "📄" : src.content_type === "audio" ? "🎙" : "🔗"}
+                          </span>
+                          {src.url ? (
+                            <a href={src.url} target="_blank" rel="noopener noreferrer"
+                              style={{ color: "var(--text-muted)", textDecoration: "none", overflow: "hidden", textOverflow: "ellipsis" }}
+                              onMouseOver={e => (e.currentTarget.style.color = "var(--accent)")}
+                              onMouseOut={e => (e.currentTarget.style.color = "var(--text-muted)")}>
+                              {src.title}
+                            </a>
+                          ) : (
+                            <span style={{ overflow: "hidden", textOverflow: "ellipsis" }}>{src.title}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
                   {/* contextual inference offer */}
                   {msg.noMaterial && !msg.streaming && (
                     <button
@@ -272,6 +412,25 @@ export function ChatInterface({ master }: { master: Master }) {
                     >
                       ⚡ Try contextual inference — what would {master.name} likely say?
                     </button>
+                  )}
+                  {/* follow-up suggestion buttons */}
+                  {msg.followUps && msg.followUps.length > 0 && !msg.streaming && (
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                      {msg.followUps.map((fq, i) => (
+                        <button key={i} onClick={() => sendMessage(fq)}
+                          disabled={loading}
+                          style={{
+                            padding: "5px 11px", borderRadius: 8, fontSize: 11.5,
+                            background: "var(--surface-2)", border: "1px solid var(--border)",
+                            color: "var(--text-secondary)", cursor: loading ? "not-allowed" : "pointer",
+                            transition: "all 0.15s", textAlign: "left", lineHeight: 1.4,
+                          }}
+                          onMouseOver={e => { e.currentTarget.style.borderColor = "var(--accent)"; e.currentTarget.style.color = "var(--text-primary)"; }}
+                          onMouseOut={e => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.color = "var(--text-secondary)"; }}>
+                          {fq}
+                        </button>
+                      ))}
+                    </div>
                   )}
                 </div>
               </motion.div>
@@ -304,6 +463,32 @@ export function ChatInterface({ master }: { master: Master }) {
                 Suggest question
               </button>
             )}
+            {/* Save conversation */}
+            {messages.length > 0 && (
+              <button onClick={saveConversation} disabled={savingConvo}
+                style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, color: saveFlash ? "var(--color-success)" : "var(--text-muted)", background: "none", border: "none", cursor: savingConvo ? "not-allowed" : "pointer", transition: "color 0.12s" }}
+                onMouseOver={e => { if (!saveFlash) e.currentTarget.style.color = "var(--accent)"; }}
+                onMouseOut={e => { if (!saveFlash) e.currentTarget.style.color = "var(--text-muted)"; }}>
+                <Save size={11} />
+                {saveFlash ? "Saved" : savingConvo ? "Saving…" : "Save"}
+              </button>
+            )}
+            {/* Export saved conversation */}
+            {savedConvoId && (
+              <button onClick={exportConversation}
+                style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "var(--text-muted)", background: "none", border: "none", cursor: "pointer", transition: "color 0.12s" }}
+                onMouseOver={e => (e.currentTarget.style.color = "var(--accent)")}
+                onMouseOut={e => (e.currentTarget.style.color = "var(--text-muted)")}>
+                <Download size={11} /> Export
+              </button>
+            )}
+            {/* Load past conversations */}
+            <button onClick={loadConversationList}
+              style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11.5, color: "var(--text-muted)", background: "none", border: "none", cursor: "pointer", transition: "color 0.12s" }}
+              onMouseOver={e => (e.currentTarget.style.color = "var(--accent)")}
+              onMouseOut={e => (e.currentTarget.style.color = "var(--text-muted)")}>
+              <FolderOpen size={11} /> History
+            </button>
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -404,6 +589,61 @@ export function ChatInterface({ master }: { master: Master }) {
         </div>
         <p style={{ fontSize: 10.5, color: "var(--text-muted)", marginTop: 8, opacity: 0.7 }}>⏎ Send · Shift+⏎ New line{speechSupported ? " · Mic to speak" : ""}</p>
       </div>
+
+      {/* Conversation history panel */}
+      {showConvoList && (
+        <div style={{
+          position: "absolute", bottom: 120, left: 20, right: 20,
+          background: "var(--surface)", border: "1px solid var(--border)",
+          borderRadius: 12, boxShadow: "0 8px 32px rgba(0,0,0,0.15)",
+          maxHeight: 300, overflow: "hidden", display: "flex", flexDirection: "column",
+          zIndex: 20,
+        }}>
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between",
+            padding: "10px 14px", borderBottom: "1px solid var(--border)",
+          }}>
+            <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-primary)" }}>Saved conversations</span>
+            <button onClick={() => setShowConvoList(false)}
+              style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", padding: 2 }}>
+              <X size={14} />
+            </button>
+          </div>
+          <div style={{ flex: 1, overflowY: "auto" }}>
+            {loadingConvos ? (
+              <div style={{ padding: 20, textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>Loading…</div>
+            ) : convoList.length === 0 ? (
+              <div style={{ padding: 20, textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>No saved conversations yet</div>
+            ) : (
+              convoList.map((c) => (
+                <div key={c.id} style={{
+                  display: "flex", alignItems: "center", justifyContent: "space-between",
+                  padding: "10px 14px", borderBottom: "1px solid var(--border)",
+                  cursor: "pointer", transition: "background 0.1s",
+                }}
+                onMouseOver={e => (e.currentTarget.style.background = "var(--surface-2)")}
+                onMouseOut={e => (e.currentTarget.style.background = "transparent")}>
+                  <div onClick={() => loadConversation(c.id)} style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, color: "var(--text-primary)", fontWeight: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                      {c.title}
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
+                      {c.message_count} messages · {new Date(c.created_at).toLocaleDateString()}
+                    </div>
+                  </div>
+                  <button onClick={(e) => { e.stopPropagation(); deleteConversation(c.id); }}
+                    title="Delete conversation"
+                    style={{ background: "none", border: "none", color: "var(--text-muted)", cursor: "pointer", padding: 4, flexShrink: 0 }}
+                    onMouseOver={e => (e.currentTarget.style.color = "var(--color-error)")}
+                    onMouseOut={e => (e.currentTarget.style.color = "var(--text-muted)")}>
+                    <Trash2 size={13} />
+                  </button>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
 
       <style>{`
         @keyframes wave { from { transform: scaleY(0.5); } to { transform: scaleY(1.5); } }

@@ -202,6 +202,97 @@ async def get_collection_count(master_id: str) -> int:
     return await loop.run_in_executor(None, _count)
 
 
+async def update_chunk(
+    master_id: str,
+    source_id: str,
+    chunk_index: int,
+    new_text: str,
+    new_embedding: list[float],
+) -> bool:
+    """Update a single chunk's text and embedding in-place."""
+    loop = asyncio.get_event_loop()
+
+    def _update():
+        client = get_chroma_client()
+        try:
+            collection = client.get_collection(_collection_name(master_id))
+            chunk_id = f"{source_id}-chunk-{chunk_index}"
+            collection.update(
+                ids=[chunk_id],
+                documents=[new_text],
+                embeddings=[new_embedding],
+            )
+            return True
+        except Exception:
+            return False
+
+    return await loop.run_in_executor(None, _update)
+
+
+async def find_duplicate_sources(master_id: str, threshold: float = 0.92) -> list[dict]:
+    """Find sources with high text overlap. Compares first chunks of each source pair via cosine similarity."""
+    loop = asyncio.get_event_loop()
+
+    def _find():
+        client = get_chroma_client()
+        try:
+            collection = client.get_collection(_collection_name(master_id))
+            # Get first chunk (chunk_index=0) for each source
+            results = collection.get(
+                where={"chunk_index": 0},
+                include=["documents", "metadatas", "embeddings"],
+            )
+            if not results["ids"]:
+                return []
+
+            docs = results["documents"]
+            metas = results["metadatas"]
+            embeddings = results["embeddings"]
+
+            # Build per-source data
+            sources_data = []
+            for i, (doc, meta, emb) in enumerate(zip(docs, metas, embeddings)):
+                sources_data.append({
+                    "source_id": meta.get("source_id", ""),
+                    "title": meta.get("title", "Unknown"),
+                    "content_type": meta.get("content_type", "web"),
+                    "text_preview": doc[:200] if doc else "",
+                    "embedding": emb,
+                })
+
+            # Compare all pairs
+            import math
+            duplicates = []
+            for i in range(len(sources_data)):
+                for j in range(i + 1, len(sources_data)):
+                    a, b = sources_data[i], sources_data[j]
+                    # Skip if same source
+                    if a["source_id"] == b["source_id"]:
+                        continue
+                    # Cosine similarity
+                    dot = sum(x * y for x, y in zip(a["embedding"], b["embedding"]))
+                    norm_a = math.sqrt(sum(x * x for x in a["embedding"]))
+                    norm_b = math.sqrt(sum(x * x for x in b["embedding"]))
+                    if norm_a == 0 or norm_b == 0:
+                        continue
+                    similarity = dot / (norm_a * norm_b)
+                    if similarity >= threshold:
+                        duplicates.append({
+                            "source_a": {"id": a["source_id"], "title": a["title"], "content_type": a["content_type"]},
+                            "source_b": {"id": b["source_id"], "title": b["title"], "content_type": b["content_type"]},
+                            "similarity": round(similarity, 3),
+                            "preview_a": a["text_preview"],
+                            "preview_b": b["text_preview"],
+                        })
+
+            duplicates.sort(key=lambda x: x["similarity"], reverse=True)
+            return duplicates
+        except Exception:
+            return []
+
+    return await loop.run_in_executor(None, _find)
+
+
 async def get_random_chunks(master_id: str, n: int = 8) -> list[str]:
     """Return up to n random document chunks from the master's collection."""
     import random

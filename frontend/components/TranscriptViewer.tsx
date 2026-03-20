@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState, useRef } from "react";
-import { X, Copy, Check, FileText, Users, Languages, ChevronDown, RotateCcw } from "lucide-react";
+import { X, Copy, Check, FileText, Users, Languages, ChevronDown, RotateCcw, Pencil, Save } from "lucide-react";
 import { api, Source, TranscriptResponse, TranscriptSegment } from "@/lib/api";
 import { CONTENT_TYPE_LABELS, formatDuration } from "@/lib/utils";
 
@@ -66,11 +66,26 @@ function groupSegments(segments: TranscriptSegment[], speakerLabels: Record<stri
   return blocks;
 }
 
+interface EditableChunk {
+  text: string;
+  chunk_index: number;
+  speaker?: string;
+}
+
 export function TranscriptViewer({ source, masterName, onClose }: TranscriptViewerProps) {
   const [transcript, setTranscript] = useState<TranscriptResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+
+  // Edit mode state
+  const [editMode, setEditMode] = useState(false);
+  const [chunks, setChunks] = useState<EditableChunk[]>([]);
+  const [loadingChunks, setLoadingChunks] = useState(false);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editText, setEditText] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState<number | null>(null);
 
   // Translation state
   const [selectedLang, setSelectedLang] = useState("");
@@ -148,6 +163,56 @@ export function TranscriptViewer({ source, masterName, onClose }: TranscriptView
     await navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const toggleEditMode = async () => {
+    if (editMode) {
+      setEditMode(false);
+      setEditingIndex(null);
+      return;
+    }
+    if (!source) return;
+    setEditMode(true);
+    if (chunks.length === 0) {
+      setLoadingChunks(true);
+      try {
+        const res = await api.sources.getChunks(source.id);
+        setChunks(res.chunks);
+      } catch (e) {
+        console.error("Failed to load chunks:", e);
+      } finally {
+        setLoadingChunks(false);
+      }
+    }
+  };
+
+  const startEditing = (chunk: EditableChunk) => {
+    setEditingIndex(chunk.chunk_index);
+    setEditText(chunk.text);
+  };
+
+  const cancelEditing = () => {
+    setEditingIndex(null);
+    setEditText("");
+  };
+
+  const saveChunk = async () => {
+    if (editingIndex === null || !source) return;
+    setSaving(true);
+    try {
+      await api.sources.updateChunk(source.id, editingIndex, editText);
+      setChunks((prev) =>
+        prev.map((c) => c.chunk_index === editingIndex ? { ...c, text: editText } : c)
+      );
+      setSaveSuccess(editingIndex);
+      setTimeout(() => setSaveSuccess(null), 2000);
+      setEditingIndex(null);
+      setEditText("");
+    } catch (e) {
+      console.error("Failed to save chunk:", e);
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleBackdropClick = (e: React.MouseEvent) => {
@@ -279,6 +344,23 @@ export function TranscriptViewer({ source, masterName, onClose }: TranscriptView
             </div>
 
             <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+              {transcript && !isShowingTranslation && (
+                <button
+                  onClick={toggleEditMode}
+                  title={editMode ? "Exit edit mode" : "Edit transcript chunks"}
+                  style={{
+                    display: "flex", alignItems: "center", gap: 5,
+                    padding: "6px 10px", borderRadius: 8,
+                    background: editMode ? "var(--accent-dim)" : "var(--surface-2)",
+                    border: `1px solid ${editMode ? "var(--accent)" : "var(--border)"}`,
+                    color: editMode ? "var(--accent)" : "var(--text-secondary)",
+                    fontSize: 12, fontWeight: 500, cursor: "pointer", transition: "all 0.15s",
+                  }}
+                >
+                  <Pencil size={12} />
+                  {editMode ? "Done" : "Edit"}
+                </button>
+              )}
               {(displayText || transcript?.text) && (
                 <button
                   onClick={handleCopy}
@@ -409,7 +491,95 @@ export function TranscriptViewer({ source, masterName, onClose }: TranscriptView
           )}
 
           {transcript && !loading && (
-            hasDiarization && blocks.length > 0 ? (
+            editMode ? (
+              // Edit mode — show individual chunks
+              loadingChunks ? (
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "center", paddingTop: 80, gap: 10, color: "var(--text-muted)", fontSize: 14 }}>
+                  <div style={{ width: 16, height: 16, border: "2px solid var(--accent)", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
+                  Loading chunks…
+                </div>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+                  <p style={{ fontSize: 11.5, color: "var(--text-muted)", margin: "0 0 4px" }}>
+                    Click any chunk to edit it. Changes are re-indexed immediately.
+                  </p>
+                  {chunks.map((chunk) => (
+                    <div key={chunk.chunk_index} style={{
+                      borderRadius: 10, border: `1px solid ${editingIndex === chunk.chunk_index ? "var(--accent)" : saveSuccess === chunk.chunk_index ? "rgba(22,163,74,0.5)" : "var(--border)"}`,
+                      background: editingIndex === chunk.chunk_index ? "var(--surface-2)" : saveSuccess === chunk.chunk_index ? "rgba(22,163,74,0.04)" : "var(--surface)",
+                      transition: "all 0.15s",
+                    }}>
+                      <div style={{
+                        display: "flex", alignItems: "center", justifyContent: "space-between",
+                        padding: "6px 12px", borderBottom: `1px solid ${editingIndex === chunk.chunk_index ? "var(--accent)" : "var(--border)"}`,
+                        background: "var(--surface-2)", borderRadius: "10px 10px 0 0",
+                      }}>
+                        <span style={{ fontSize: 10.5, color: "var(--text-muted)", fontWeight: 600 }}>
+                          Chunk {chunk.chunk_index + 1}
+                          {saveSuccess === chunk.chunk_index && <span style={{ color: "var(--color-success)", marginLeft: 8 }}>Saved</span>}
+                        </span>
+                        {editingIndex === chunk.chunk_index ? (
+                          <div style={{ display: "flex", gap: 6 }}>
+                            <button onClick={cancelEditing}
+                              style={{ fontSize: 11, color: "var(--text-muted)", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>
+                              Cancel
+                            </button>
+                            <button onClick={saveChunk} disabled={saving || editText === chunk.text}
+                              style={{
+                                display: "flex", alignItems: "center", gap: 4,
+                                padding: "3px 8px", borderRadius: 6, fontSize: 11, fontWeight: 600,
+                                background: saving || editText === chunk.text ? "var(--surface-3)" : "var(--accent)",
+                                border: "none", color: saving || editText === chunk.text ? "var(--text-muted)" : "#fff",
+                                cursor: saving || editText === chunk.text ? "not-allowed" : "pointer",
+                              }}>
+                              <Save size={10} />
+                              {saving ? "Saving…" : "Save & Re-index"}
+                            </button>
+                          </div>
+                        ) : (
+                          <button onClick={() => startEditing(chunk)}
+                            style={{
+                              display: "flex", alignItems: "center", gap: 4,
+                              padding: "3px 8px", borderRadius: 6, fontSize: 11,
+                              background: "var(--surface-3)", border: "1px solid var(--border)",
+                              color: "var(--text-secondary)", cursor: "pointer",
+                            }}
+                            onMouseOver={e => { e.currentTarget.style.borderColor = "var(--accent)"; e.currentTarget.style.color = "var(--accent)"; }}
+                            onMouseOut={e => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.color = "var(--text-secondary)"; }}>
+                            <Pencil size={9} /> Edit
+                          </button>
+                        )}
+                      </div>
+                      <div style={{ padding: "10px 12px" }}>
+                        {editingIndex === chunk.chunk_index ? (
+                          <textarea
+                            value={editText}
+                            onChange={(e) => setEditText(e.target.value)}
+                            style={{
+                              width: "100%", minHeight: 120, resize: "vertical",
+                              background: "var(--surface)", border: "1px solid var(--border)",
+                              borderRadius: 8, padding: "10px 12px", fontSize: 13, lineHeight: 1.7,
+                              color: "var(--text-primary)", fontFamily: "inherit", outline: "none",
+                            }}
+                            onFocus={e => (e.target.style.borderColor = "var(--accent)")}
+                            onBlur={e => (e.target.style.borderColor = "var(--border)")}
+                          />
+                        ) : (
+                          <p style={{
+                            fontSize: 13, lineHeight: 1.7, color: "var(--text-primary)",
+                            margin: 0, whiteSpace: "pre-wrap", wordBreak: "break-word",
+                            cursor: "pointer",
+                          }}
+                          onClick={() => startEditing(chunk)}>
+                            {chunk.text}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )
+            ) : hasDiarization && blocks.length > 0 ? (
               <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
                 {blocks.map((block, i) => {
                   const color = getSpeakerColor(block.colorIndex);

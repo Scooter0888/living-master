@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-import { Trash2, ExternalLink, RefreshCw, CheckCircle2, XCircle, Clock, Loader2, FileText, Users, Film, RotateCcw, Upload } from "lucide-react";
+import { Trash2, ExternalLink, RefreshCw, CheckCircle2, XCircle, Clock, Loader2, FileText, Users, Film, RotateCcw, Upload, Copy } from "lucide-react";
 import { api, Source } from "@/lib/api";
 import { CONTENT_TYPE_ICONS, CONTENT_TYPE_LABELS, formatDuration, formatRelativeTime } from "@/lib/utils";
 import { TranscriptViewer } from "./TranscriptViewer";
@@ -65,6 +65,14 @@ export function SourceLibrary({ sources, masterId, masterName = "Master", onDele
   const [autoIdentifyError, setAutoIdentifyError] = useState<string | null>(null);
   const [reindexingAll, setReindexingAll] = useState(false);
   const [reindexAllResult, setReindexAllResult] = useState<string | null>(null);
+  const [checkingDuplicates, setCheckingDuplicates] = useState(false);
+  const [duplicates, setDuplicates] = useState<{
+    source_a: { id: string; title: string; content_type: string };
+    source_b: { id: string; title: string; content_type: string };
+    similarity: number;
+    preview_a: string;
+    preview_b: string;
+  }[] | null>(null);
   const hasProcessing = sources.some((s) => s.status === "processing" || s.status === "pending" || s.status === "needs_speaker_id");
 
   useEffect(() => {
@@ -142,6 +150,18 @@ export function SourceLibrary({ sources, masterId, masterName = "Master", onDele
       setAutoIdentifyError(e.message || "Auto-identify failed");
     } finally {
       setAutoIdentifying(false);
+    }
+  };
+
+  const handleCheckDuplicates = async () => {
+    setCheckingDuplicates(true);
+    try {
+      const res = await api.ingest.checkDuplicates(masterId);
+      setDuplicates(res.duplicates);
+    } catch (e) {
+      console.error("Duplicate check failed:", e);
+    } finally {
+      setCheckingDuplicates(false);
     }
   };
 
@@ -297,6 +317,94 @@ export function SourceLibrary({ sources, masterId, masterName = "Master", onDele
           </div>
         );
       })()}
+
+      {/* Duplicate detection */}
+      {completed >= 2 && (
+        <div style={{ marginBottom: 14 }}>
+          {duplicates === null ? (
+            <button
+              onClick={handleCheckDuplicates}
+              disabled={checkingDuplicates}
+              style={{
+                display: "flex", alignItems: "center", gap: 5,
+                padding: "6px 12px", borderRadius: 8, fontSize: 11.5, fontWeight: 500,
+                background: "var(--surface-2)", border: "1px solid var(--border)",
+                color: "var(--text-secondary)", cursor: checkingDuplicates ? "not-allowed" : "pointer",
+                transition: "all 0.15s", opacity: checkingDuplicates ? 0.6 : 1,
+              }}
+              onMouseOver={e => { e.currentTarget.style.borderColor = "var(--accent)"; e.currentTarget.style.color = "var(--accent)"; }}
+              onMouseOut={e => { e.currentTarget.style.borderColor = "var(--border)"; e.currentTarget.style.color = "var(--text-secondary)"; }}
+            >
+              <Copy size={11} style={{ animation: checkingDuplicates ? "spin 1s linear infinite" : "none" }} />
+              {checkingDuplicates ? "Checking…" : "Check for duplicate sources"}
+            </button>
+          ) : duplicates.length === 0 ? (
+            <div style={{
+              padding: "10px 14px", borderRadius: 10,
+              background: "rgba(22,163,74,0.06)", border: "1px solid rgba(22,163,74,0.2)",
+              display: "flex", alignItems: "center", justifyContent: "space-between",
+            }}>
+              <span style={{ fontSize: 12.5, color: "var(--color-success, #16a34a)", fontWeight: 500 }}>
+                No duplicates found
+              </span>
+              <button onClick={() => setDuplicates(null)}
+                style={{ fontSize: 11, color: "var(--text-muted)", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>
+                Dismiss
+              </button>
+            </div>
+          ) : (
+            <div style={{
+              padding: "12px 14px", borderRadius: 10,
+              background: "rgba(245,158,11,0.06)", border: "1px solid rgba(245,158,11,0.2)",
+            }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+                <span style={{ fontSize: 12.5, fontWeight: 600, color: "#d97706" }}>
+                  {duplicates.length} potential duplicate{duplicates.length !== 1 ? "s" : ""} found
+                </span>
+                <button onClick={() => setDuplicates(null)}
+                  style={{ fontSize: 11, color: "var(--text-muted)", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>
+                  Dismiss
+                </button>
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                {duplicates.map((d, i) => (
+                  <div key={i} style={{
+                    padding: "8px 10px", borderRadius: 8,
+                    background: "var(--surface)", border: "1px solid var(--border)",
+                    fontSize: 12, color: "var(--text-secondary)",
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 4 }}>
+                      <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>
+                        {Math.round(d.similarity * 100)}% similar
+                      </span>
+                      <button
+                        onClick={() => {
+                          if (confirm(`Remove "${d.source_b.title}"?`)) {
+                            api.ingest.deleteSource(masterId, d.source_b.id).then(() => {
+                              onDeleted();
+                              setDuplicates(prev => prev ? prev.filter((_, idx) => idx !== i) : null);
+                            });
+                          }
+                        }}
+                        style={{
+                          fontSize: 11, padding: "2px 8px", borderRadius: 6,
+                          background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)",
+                          color: "var(--color-error)", cursor: "pointer",
+                        }}>
+                        Remove B
+                      </button>
+                    </div>
+                    <div style={{ fontSize: 11.5, lineHeight: 1.5 }}>
+                      <div><strong>A:</strong> {d.source_a.title}</div>
+                      <div><strong>B:</strong> {d.source_b.title}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Table */}
       <div style={{ borderRadius: 12, border: "1px solid var(--border)", overflow: "hidden" }}>

@@ -218,6 +218,17 @@ export const api = {
       request<{ retried: number; message: string }>(`/masters/${masterId}/ingest/retry-failed`, {
         method: "POST",
       }),
+    checkDuplicates: (masterId: string) =>
+      request<{
+        duplicates: {
+          source_a: { id: string; title: string; content_type: string };
+          source_b: { id: string; title: string; content_type: string };
+          similarity: number;
+          preview_a: string;
+          preview_b: string;
+        }[];
+        count: number;
+      }>(`/masters/${masterId}/ingest/duplicates`),
     scanLocal: (masterId: string) =>
       request<{ sources: { label: string; path: string; type: string; detail: string }[] }>(
         `/masters/${masterId}/ingest/scan-local`
@@ -227,6 +238,15 @@ export const api = {
   sources: {
     getStatus: (sourceId: string) => request<Source>(`/sources/${sourceId}/status`),
     getTranscript: (sourceId: string) => request<TranscriptResponse>(`/sources/${sourceId}/transcript`),
+    getChunks: (sourceId: string) =>
+      request<{ source_id: string; chunks: { text: string; chunk_index: number; speaker?: string }[] }>(
+        `/sources/${sourceId}/chunks`
+      ),
+    updateChunk: (sourceId: string, chunkIndex: number, text: string) =>
+      request<{ status: string; chunk_index: number }>(`/sources/${sourceId}/chunks/${chunkIndex}`, {
+        method: "PATCH",
+        body: JSON.stringify({ text }),
+      }),
     translate: (sourceId: string, targetLanguage: string) =>
       request<{ source_id: string; target_language: string; text: string; segments: TranscriptSegment[] }>(
         `/sources/${sourceId}/translate`,
@@ -431,6 +451,31 @@ export const api = {
     },
   },
 
+  conversations: {
+    list: (masterId: string) =>
+      request<{ id: string; title: string; message_count: number; created_at: string; updated_at: string }[]>(
+        `/masters/${masterId}/conversations/`
+      ),
+    save: (masterId: string, messages: { role: string; content: string; sources?: any[] }[], title?: string) =>
+      request<{ id: string; title: string }>(`/masters/${masterId}/conversations/`, {
+        method: "POST",
+        body: JSON.stringify({ messages, title }),
+      }),
+    get: (masterId: string, conversationId: string) =>
+      request<{ id: string; title: string; created_at: string; messages: { role: string; content: string; sources?: any[] }[] }>(
+        `/masters/${masterId}/conversations/${conversationId}`
+      ),
+    delete: (masterId: string, conversationId: string) =>
+      fetch(`${API_BASE}/masters/${masterId}/conversations/${conversationId}`, {
+        method: "DELETE",
+        headers: headers(),
+      }),
+    exportJson: (masterId: string, conversationId: string) =>
+      request<{ title: string; master: string; created_at: string; messages: any[] }>(
+        `/masters/${masterId}/conversations/${conversationId}/export`
+      ),
+  },
+
   authMe: () => request<{ role: "admin" | "viewer" }>("/auth/me"),
 
   capabilities: () => request<Capabilities>("/capabilities"),
@@ -461,6 +506,11 @@ export const api = {
 
   query: {
     suggest: (masterId: string) => request<{ question: string }>(`/masters/${masterId}/query/suggest`),
+    followUps: (masterId: string, question: string, answer: string) =>
+      request<{ questions: string[] }>(`/masters/${masterId}/query/follow-ups`, {
+        method: "POST",
+        body: JSON.stringify({ question, answer }),
+      }),
     stream: (_masterId: string, _question: string): EventSource => {
       return null as any; // handled via streamFetch
     },

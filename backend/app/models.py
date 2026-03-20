@@ -92,6 +92,32 @@ class Source(Base):
     master = relationship("Master", back_populates="sources")
 
 
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    master_id = Column(String, ForeignKey("masters.id"), nullable=False)
+    title = Column(String, nullable=False, default="Untitled")
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    master = relationship("Master")
+    messages = relationship("ConversationMessage", back_populates="conversation", cascade="all, delete-orphan", order_by="ConversationMessage.created_at")
+
+
+class ConversationMessage(Base):
+    __tablename__ = "conversation_messages"
+
+    id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    conversation_id = Column(String, ForeignKey("conversations.id"), nullable=False)
+    role = Column(String, nullable=False)  # "user" | "assistant"
+    content = Column(Text, nullable=False)
+    sources_json = Column(Text, nullable=True)  # JSON array of source refs
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+
+    conversation = relationship("Conversation", back_populates="messages")
+
+
 class Photo(Base):
     __tablename__ = "photos"
 

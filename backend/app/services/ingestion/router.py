@@ -74,6 +74,6 @@ async def ingest_file(file_path: str, original_filename: str, run_movement_analy
 
     if content_type == "iso":
         from app.services.ingestion.iso import ingest_iso
-        return await ingest_iso(file_path, original_filename)
+        return await ingest_iso(file_path, original_filename, run_movement_analysis=run_movement_analysis)
 
     raise ValueError(f"Unsupported file type: {original_filename}")

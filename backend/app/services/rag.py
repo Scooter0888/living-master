@@ -162,6 +162,24 @@ async def _call_openai(system: str, user_msg: str, model: str) -> str:
 # ---------------------------------------------------------------------------
 # Public interface
 # ---------------------------------------------------------------------------
+def _extract_sources(chunks: list[dict]) -> list[dict]:
+    """Extract unique sources from retrieved chunks."""
+    sources: list[dict] = []
+    seen: set[str] = set()
+    for chunk in chunks:
+        meta = chunk.get("metadata", {})
+        sid = meta.get("source_id", "")
+        if sid and sid not in seen:
+            seen.add(sid)
+            sources.append({
+                "title": meta.get("title", "Unknown Source"),
+                "url": meta.get("url", ""),
+                "content_type": meta.get("content_type", "web"),
+                "score": round(chunk.get("score", 0), 3),
+            })
+    return sources
+
+
 async def query_master(
     master_id: str,
     master_name: str,
@@ -196,6 +214,10 @@ async def query_master(
     else:
         async for text in _stream_anthropic(system, user_msg, model):
             yield text
+
+    # 5. Yield source metadata as a special marker after text stream
+    import json
+    yield f"\n[SOURCES]{json.dumps(_extract_sources(chunks))}"
 
 
 async def get_answer_with_sources(

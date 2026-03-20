@@ -56,6 +56,21 @@ async def lifespan(app: FastAPI):
             "ALTER TABLE sources ADD COLUMN speaker_samples_json TEXT",
             "ALTER TABLE sources ADD COLUMN processing_stage TEXT",
             "ALTER TABLE sources ADD COLUMN progress_pct INTEGER",
+            """CREATE TABLE IF NOT EXISTS conversations (
+                id TEXT PRIMARY KEY,
+                master_id TEXT NOT NULL REFERENCES masters(id),
+                title TEXT NOT NULL DEFAULT 'Untitled',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""",
+            """CREATE TABLE IF NOT EXISTS conversation_messages (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+                role TEXT NOT NULL,
+                content TEXT NOT NULL,
+                sources_json TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""",
         ]:
             try:
                 await conn.execute(text(stmt))
@@ -174,6 +189,7 @@ async def logging_and_auth(request: Request, call_next):
 
 
 from app.routers import export as export_router
+from app.routers import conversations as conversations_router
 app.include_router(masters.router)
 app.include_router(ingest.router)
 app.include_router(query.router)
@@ -183,6 +199,7 @@ app.include_router(export_router.router)
 app.include_router(media_router_module.router)
 app.include_router(voice_router_module.router)
 app.include_router(backup_router_module.router)
+app.include_router(conversations_router.router)
 
 # Serve uploaded photos as static files
 _photos_path = get_settings().photos_path
