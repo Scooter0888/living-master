@@ -25,7 +25,6 @@ router = APIRouter(prefix="/backup", tags=["backup"])
 _EXPORT_TARGETS = [
     "living_master.db",
     "chroma_db",
-    "uploads",
     "photos",
     "voice_samples",
 ]

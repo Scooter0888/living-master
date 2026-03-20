@@ -1,0 +1,6 @@
+backend/
+data/
+uploads/
+chroma_db/
+*.db
+*.zip
