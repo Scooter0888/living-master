@@ -217,7 +217,7 @@ async def query_master(
 
     # 5. Yield source metadata as a special marker after text stream
     import json
-    yield f"\n[SOURCES]{json.dumps(_extract_sources(chunks))}"
+    yield f"[SOURCES]{json.dumps(_extract_sources(chunks))}"
 
 
 async def get_answer_with_sources(

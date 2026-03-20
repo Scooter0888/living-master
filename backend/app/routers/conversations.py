@@ -28,6 +28,7 @@ async def list_conversations(
 ):
     result = await db.execute(
         select(Conversation)
+        .options(selectinload(Conversation.messages))
         .where(Conversation.master_id == master_id)
         .order_by(Conversation.updated_at.desc())
     )

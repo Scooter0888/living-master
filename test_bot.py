@@ -121,7 +121,7 @@ class LivingMasterBot:
             "name": pick["name"],
             "description": pick["description"],
         })
-        if r.status_code == 200:
+        if r.status_code in (200, 201):
             self.master_id = r.json()["id"]
             self.master_name = pick["name"]
             self._ok(f"Create master ({self.master_id[:8]})")
@@ -246,11 +246,12 @@ class LivingMasterBot:
                 sources_found = True
                 self._log(f"Answer: {answer[:150]}...")
                 self._log(f"Sources in stream: {len(sources)}")
-            except json.JSONDecodeError:
-                self._log("Sources marker found but couldn't parse JSON")
+            except json.JSONDecodeError as e:
+                self._log(f"Sources marker found but couldn't parse JSON: {e}")
+                self._log(f"  Raw: {full_text[idx:idx+100]}")
         else:
             self._log(f"Answer: {full_text[:150]}...")
-            self._log("No [SOURCES] marker in stream (may have no content)")
+            self._log("No [SOURCES] marker in stream")
 
         if full_text:
             self._ok(f"Streaming chat (sources_in_stream={sources_found})")

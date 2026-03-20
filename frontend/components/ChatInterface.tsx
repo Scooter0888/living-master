@@ -155,10 +155,10 @@ export function ChatInterface({ master }: { master: Master }) {
       // Extract sources if appended by backend
       let sources: SourceRef[] = [];
       let displayText = full;
-      const srcIdx = full.indexOf("\n[SOURCES]");
+      const srcIdx = full.indexOf("[SOURCES]");
       if (srcIdx !== -1) {
         displayText = full.slice(0, srcIdx);
-        try { sources = JSON.parse(full.slice(srcIdx + 10)); } catch {}
+        try { sources = JSON.parse(full.slice(srcIdx + 9)); } catch {}
       }
 
       // Mark whether this response found no direct material (offer contextual inference)
